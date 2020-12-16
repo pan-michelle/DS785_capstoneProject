@@ -1,0 +1,948 @@
+---
+title: "Capstone Project: Wiley Data"
+output: word_document
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+## Setup:
+```{r}
+#load necessary packages/libraries
+library(openxlsx)
+library(readr)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(knitr)
+library(tidyr)
+library(lemon)
+knit_print.data.frame <- lemon_print
+```
+
+```{r}
+#set working directory
+wd = getwd()
+setwd(wd)
+```
+
+\newline
+# Load and Combine Datasets
+*** 
+\newline
+
+\newline
+## Campus reports (BR2 and BR3) 2014-2018
+
+\newline
+```{r echo=FALSE}
+#load all Wiley BR2 and BR3 data sets
+
+#create list of files to read in
+files <- list.files(path = wd, pattern = ".*BR.*.xlsx", full.names = T)
+
+#create empty data frame
+wiley_df <- data.frame( Title = character(),
+                           Publisher = factor(),
+                           Platform = factor(),
+                           BookReport_Type = factor(),
+                           Campus = factor(),
+                           Year = factor(),
+                           Book.DOI = numeric(),
+                           Proprietary.Identifier = numeric(),
+                           ISBN = character(),
+                           ISSN = character(),
+                           Reporting.Period.Total = numeric(),
+                           Jan = numeric(), 
+                           Feb = numeric(),
+                           Mar = numeric(),
+                           Apr = numeric(),
+                           May = numeric(),
+                           Jun = numeric(),
+                           Jul = numeric(),
+                           Aug = numeric(),
+                           Sep = numeric(),
+                           Oct = numeric(),
+                           Nov = numeric(),
+                           Dec = numeric()
+                           )
+
+# read in each file, remove 1st row (total for all titles), and combine into one data frame
+for (f in files[1:length(files)]){
+  tmp = read.xlsx(f, sheet = 1, startRow = 8,skipEmptyRows=TRUE, colNames = TRUE)
+  tmp <- tmp[-c(1),] #drop 1st row 
+  names(tmp)[1] <- "Title"
+  wiley_df <- rbind(wiley_df, tmp)
+} 
+```
+
+
+\newline
+```{r}
+#view summary of data frame and first few lines of data 
+summary(wiley_df) 
+head(wiley_df)
+```
+
+
+```{r, echo=FALSE, results='hide' }
+#remove columns not relevant to this analysis
+wiley_df <- wiley_df[,-c(7,8,10,12:23)] #BookReport_Type, Book.DOI, Proprietary.Identifier, ISSN, Jan, Feb,....,Dec
+head(wiley_df)
+```
+
+\newline
+### Data Cleaning
+\newline
+\newline
+One of the BR reports has UWGB misspelled as UWBG. Observations with the incorrect spelling will be assigned the correct spelling of UWGB
+```{r}
+#rename rows with misspelled campus UWBG to UWGB
+levels(wiley_df$Campus)
+levels(wiley_df$Campus)[1] <- "UWGB"
+levels(wiley_df$Campus)
+```
+
+\newline
+Take a look at numer of NA/missing values in each column:
+```{r ,echo=FALSE}
+sapply(wiley_df, function(x) sum(is.na(x)))
+```
+\newline
+It looks like almost all columns have 19 NA values. It is likely these are observation where are all columns/variables are missing values. Let's take a look to make sure this is the case.
+```{r, echo=FALSE}
+#view indexes of several columns with NA values  
+cat("Title NA's: ", which(is.na(wiley_df$Title)), "\n")
+cat("Reporting.Period.Total NA's:", which(is.na(wiley_df$Reporting.Period.Total)), "\n")
+```
+\newline
+Indeed, it looks like the 19 NA values present in most columns of the data have the same index. These rows will be removed as they do not hold value for variables that are necessary to the analysis.
+```{r echo=FALSE, results='hide'}
+#view full rows in data set with NA values
+wiley_df[is.na(wiley_df$Title),]
+```
+
+```{r}
+#remove rows with NA values 
+na_indices <- which(is.na(wiley_df$Title))
+
+wiley_df <- wiley_df[-c(na_indices),]
+```
+\newline
+wiley_df will be merged with other dataframes later on to gain information on which titles are subscribed vs owned as well as which the subject categories of titles. ISBNs will be used to merge data frames. It is necessary to examine the number of NA/missing values there are for the ISBN column as well as the Titles column in wiley_df to determine whether it is a good idea to merge using ISBNs. If too many ISBNs are missing, it may be necessary to merge using a combination of ISBNs and Titles. Merging using title matching should be avoided if possible as titles may contain different spellings, inclusion of editions, differing symbols, and other minor variations that may cause titles to mismatch. 
+\newline
+```{r, echo=FALSE}
+#examine number of NA's for titles and ISBNs
+cat("NA Titles:",length(which(is.na(as.factor(wiley_df$Title)))),"\n") 
+cat("NA ISBNs:",length(which(is.na(as.factor(wiley_df$ISBN)))), "\n")
+
+```
+\newline
+There are only 18 observations (out of 66081) with missing NA values. It looks like it will be fine to merge on ISBN only based on an examination of the campus reports data. The inital data contained 66100 observation, so far 19 rows that were all NA values have been removed. The 18 rows with NA values for ISBN will also be removed as there will be enough data to work with without these data points.
+\newline
+```{r}
+#remove rows where ISBN is na
+wiley_df <- wiley_df[complete.cases(wiley_df$ISBN),]
+
+#check all NA's have been removed
+sapply(wiley_df, function(x) sum(is.na(x)))
+```
+
+  
+\newline
+## System Owned Titles Report
+***
+\newline
+  
+The UW system all title access data for Wiley contains all titles that the UW system has access to through Wiley. Titles with a license end date of year 2099 are owned titles. This will be used to determine which titles in the combined BR2 and BR3 data are owned titles.
+\newline
+```{r }
+#read in data set of all owned Wiley titles
+owned_full <- read.xlsx("WileyAllTitleAccessUWSYS.xlsx", sheet = 1, startRow = 7, skipEmptyRows = TRUE, colNames = TRUE)
+summary(owned_full)
+```
+
+```{r }
+#create subset of data with only columns relevant to the analysis
+owned_df <- subset( owned_full, select = c(Title, Print.ISBN, Online.ISBN, License.Start.Date, License.End.Date))
+```
+\newline
+Print.ISBN and Online.ISBN have been converted to character variables, and the year each title is purchase has been extracted from License.Start.Date and stored as Purchase.Year
+```{r}
+#convert Print.ISBN and Online.ISBN to character
+owned_df[,c(2,3)] <- lapply(owned_df[,c(2,3)], as.character)
+
+#create new column with purchase year base on License.Start.Date
+owned_df$Purchase.Year <- format(as.Date(owned_df$License.Start.Date, format="%Y-%m-%d"),"%Y")
+
+#convert License.End.Year and Purchase.Year to factor variables
+owned_df[,c(5,6)] <- lapply(owned_df[,c(5,6)], as.factor)
+
+```
+\newline
+An ownership column has been created to tag titles with a License.End.Date of 2099 as owned titles.
+```{r}
+owned_df$Ownership <- "subscribed"
+owned_df$Ownership[owned_df$License.End.Date == "2099"] <- "owned"
+
+owned_df$Ownership <- as.factor(owned_df$Ownership)
+summary(owned_df)
+```
+\newline
+License.Start.Date and License.End.Date will be removed from the data as the necessary information has been extracted and stored in new columns.
+```{r, echo=FALSE}
+owned_df <- subset(owned_df, select = -c(License.Start.Date, License.End.Date))
+```
+\newline
+```{r, echo=FALSE}
+# Examine number of NA values for Title, Print.ISBN , and Online.ISBN
+cat("NA Titles:", length(which(is.na(owned_df$Title))), "\n")
+cat("Number of NA Print.ISBNs:",length(which(is.na(owned_df$Print.ISBN))),"\n")
+cat("Number of NA Online.ISBNs:",length(which(is.na(owned_df$Online.ISBN))),"\n")
+dim(owned_df[is.na(owned_df$Print.ISBN) & is.na(owned_df$Online.ISBN),])[1]
+```
+\newline
+1972 observations out of 24944 total observations (about 8%) have NA values for both ISBN types.
+
+\newline
+The combined campus reports (BR2 and BR3) data will be merged with the all titles access data using ISBN to match both print.ISBN and  online.ISBN. Titles will not be matched on due to minor variations such as inclusions of edition, minor spelling differences, and so on causing titles not to match when they should. Matching on titles does not improve results by much (see commented out chunks).
+Before doing any merging, any spaces and non alphanumeric characters are removed from all ISBN fields that will be used for merging as a precaution. 
+\newline
+```{r}
+#remove dashes from wiley_df ISBN to match owned_df ISBN's
+wiley_df$ISBN <- gsub("-", "", wiley_df$ISBN)
+
+#remove any spaces and non-alphanumeric characters from ISBNs in wiley_df
+#or use str_replace_all(x, "[[:punct:]]", "") to remove punctuation 
+wiley_df$ISBN <- str_replace_all(wiley_df$ISBN, fixed(" "), "")
+wiley_df$ISNB <- str_replace_all(wiley_df$ISBN, "[^[:alnum:]]", "")
+
+#convert owned_df PrintISBN to character type 
+owned_df$Print.ISBN <- as.character(owned_df$Print.ISBN)
+
+#remove any spaces and non-alphanumeric characters from Print.ISBN in owned_df
+owned_df$Print.ISBN <- str_replace_all(owned_df$Print.ISBN, fixed(" "), "")
+owned_df$Print.ISBN <- str_replace_all(owned_df$Print.ISBN, "[^[:alnum:]]", "")
+
+#convert owned_df Online.ISBN to character type 
+owned_df$Online.ISBN <- as.character(owned_df$Online.ISBN)
+
+#remove any spaces and non-alphanumeric characters from Print.ISBN in owned_df
+owned_df$Online.ISBN <- str_replace_all(owned_df$Online.ISBN, fixed(" "), "")
+owned_df$Online.ISBN <- str_replace_all(owned_df$Online.ISBN, "[^[:alnum:]]", "")
+
+```
+\newline
+
+```{r echo=FALSE}
+#Uncomment to test merging with Titles
+# Convert titles to all lower case and remove spaces and any non alphanumeric character for both data sets
+#wiley_df$Title <- tolower(wiley_df$Title)
+#wiley_df$Title <- str_replace_all(wiley_df$Title, fixed(" "), "")
+#wiley_df$Title <- str_replace_all(wiley_df$Title, "[^[:alnum:]]", "")
+
+#owned_df$Title <- tolower(owned_df$Title)
+#owned_df$Title <- str_replace_all(owned_df$Title, fixed(" "), "")
+#owned_df$Title <- str_replace_all(owned_df$Title, "[^[:alnum:]]", "" )
+```
+\newline
+
+### 1st merge:
+\newline
+The first merge will merge the combined campus reports (wiley_df) using ISBN with the all titles access reports (owned_df) using Online.ISBN.
+\newline
+```{r}
+# Merge wiley_df and owned_df on Online.ISBN
+merge_df <-merge(wiley_df,owned_df, by.x = "ISBN", by.y = "Online.ISBN", all.x = TRUE)
+
+#remove duplicate columns from merging
+merge_df <- subset(merge_df, select = -c(ISNB, Title.y, Print.ISBN))
+names(merge_df)[2] <- "Title"
+
+cat("Number of NA values in ownership column after 1st merge:", length(which(is.na(merge_df$Ownership))))
+```
+\newline
+### 2nd merge:
+The second merge will merge the combined campus reports (wiley_df) using ISBN with the all titles access reports (owned_df) using Print.ISBN.
+\newline
+```{r}
+#merge 1st merged data frame with owned_df on Print.ISBN
+owned_subscribed_df<- merge(merge_df, owned_df, by.x = "ISBN", by.y = "Print.ISBN", all.x = TRUE )
+
+#assign value of "owned" to titles that are tagged as owned in ownership.y column from the 2nd merge
+owned_subscribed_df$Ownership.x[!is.na(owned_subscribed_df$Ownership.y) & is.na(owned_subscribed_df$Ownership.x)] <- owned_subscribed_df$Ownership.y[!is.na(owned_subscribed_df$Ownership.y) & is.na(owned_subscribed_df$Ownership.x)]
+
+#combine two purchase.year columns 
+owned_subscribed_df$Purchase.Year.x[!is.na(owned_subscribed_df$Purchase.Year.y) & is.na(owned_subscribed_df$Purchase.Year.x)] <-  owned_subscribed_df$Purchase.Year.y[!is.na(owned_subscribed_df$Purchase.Year.y) & is.na(owned_subscribed_df$Purchase.Year.x)]
+
+#remove duplicate columns
+owned_subscribed_df <- subset(owned_subscribed_df, select = -c(Title.y, Online.ISBN, Purchase.Year.y, Ownership.y))
+
+#rename columns with .x or .y added due to merging
+names(owned_subscribed_df)[2] <- "Title"
+names(owned_subscribed_df)[9] <- "Purchase.Year"
+names(owned_subscribed_df)[10] <- "Ownership"
+
+cat("Number of NA values in ownership column after 2nd merge:", length(which(is.na(owned_subscribed_df$Ownership))))
+```
+\newline
+After merging twice, there are still 6468 NA values in the Ownership column. This is not surprising as the combined campuse data includes BR3 reports which are titles where access was denied. The all titles access report only includes accessible titles, so it is not surprising that there is a rather large amount of titles that do not match up. BR3 data is included to cover titles that should be accessible, but were not able to be accessed due to reasons outside of ownership/subscription. BR3 data has also included for additional data points to build a predictive model with later on. 
+\newline
+```{r}
+#Uncomment to see results of merging using Title
+#test_df <- merge(owned_subscribed_df, owned_df, by.x = "Title", by.y = "Title", all.x=TRUE)
+
+#test_df$Ownership.x[!is.na(test_df$Ownership.x) & is.na(test_df$Ownership.x)] <- test_df$Ownership[!is.na(test_df$Ownership.x) & is.na(test_df$Ownership.x)]
+
+#cat("Number of NA values in ownership column after 3rd merge:", length(which(is.na(test_df$Ownership.x))))
+```
+
+Before moving on, let's take a look at the number of unique titles for each ownership type as well as the number of NA titles. NA titles are titles in the combine campus reports (BR2 and BR3 for all campuses) that were not found in the system all access titles report. This makes sense as BR3 reports titles that were attempted to be accessed but not accessible. 
+```{r}
+#convert ownership column to factor type variable
+owned_subscribed_df$Ownership <- as.factor(owned_subscribed_df$Ownership)
+
+#take a look at number of unique owned vs subscribed titles
+unique_titles <- distinct(owned_subscribed_df, owned_subscribed_df$ISBN, .keep_all=TRUE)
+summary(as.factor(unique_titles$Ownership))
+```
+  
+  
+\newline
+## Subject Categories
+***
+\newline
+
+the Wiley order form data contains all titles that can be purchased or subscribed to through Wiley. This data includes what subject area each title falls under. The previously owned_subscribed_df will be combined with the order form data to obtain subject area categories.
+\newline
+```{r}
+# Read in Wiley Ebook Order Form data
+orderForm_df = read.csv("WileyEbookOrderForm.csv", skip=2, header=T)
+summary(orderForm_df)
+head(orderForm_df)
+```
+\newline
+A subset of the data with only relevant columns/variables will be used
+```{r}
+# Create subset of data with only relevant variables
+orderForm_df <- subset(orderForm_df, select = c(Print.ISBN13, O.Book.ISBN13,E.Book.ISBN13,Main.Subject.Category,Print.Publication...Year))
+head(orderForm_df)
+```
+
+\newline
+O-Book.ISBN13 is the ISBN that matches the ISBN from our merged data set owned_subscribed_df. However, some ISBNs seem to match Print.ISBN13 and E-book.ISBN13 too. All three ISBN's will be stripped of any punctuation and spaces then used to merge on for the most complete set of data possible.
+```{r}
+
+# Remove any spaces and non alphanumeric characters present in Print.ISBN13, O-Book.ISBN13, and E-Book.ISBN13
+orderForm_df$Print.ISBN13 <- str_replace_all(orderForm_df$Print.ISBN13 , fixed(" "), "")
+orderForm_df$Print.ISBN13  <- str_replace_all(orderForm_df$Print.ISBN13 , "[^[:alnum:]]", "")
+
+orderForm_df$O.Book.ISBN13 <- str_replace_all(orderForm_df$O.Book.ISBN13 , fixed(" "), "")
+orderForm_df$O.Book.ISBN13  <- str_replace_all(orderForm_df$O.Book.ISBN13 , "[^[:alnum:]]", "")
+
+orderForm_df$E.Book.ISBN13 <- str_replace_all(orderForm_df$E.Book.ISBN13 , fixed(" "), "")
+orderForm_df$E.Book.ISBN13 <- str_replace_all(orderForm_df$E.Book.ISBN13 , "[^[:alnum:]]", "")
+```
+
+```{r, echo=FALSE}
+# Check whether there are any rows with NA values for Print.ISBN13, O-Book.ISBN13, and E-book.ISBN13
+cat("Number of Print.ISBN13 NAs:",length(which(is.na(orderForm_df$Print.ISBN13))),"\n")
+
+cat("O-Book.ISBN13 NA's:",length(which(is.na(orderForm_df$O.Book.ISBN13))),"\n")
+
+cat("Number of E-Book.ISBN13 NA's:",length(which(is.na(orderForm_df$E.Book.ISBN13))),"\n")
+
+cat("Number of Main.Subject.Category NA's:",length(which(is.na(orderForm_df$Main.Subject.Category))),"\n")
+```
+
+The data is looking good so far. There are no missing values for O-Book ISBN (the ISBN most owned_subscribed_df ISBNs should match), Print ISBN ,or for Main.Subject.Category (the main variable of interest).
+\newline
+
+### 1st merge
+\newline
+The first merge will combine owned_subscribed_df with the order form data using O-Book.ISBN13.
+\newline
+```{r}
+# merge on ISBN in owned_subscribed_df and O-Book.ISBN13 in orderForm_df
+merge_df2 <-merge(owned_subscribed_df, orderForm_df, by.x = "ISBN", by.y = "O.Book.ISBN13", all.x = TRUE)
+```
+
+```{r, echo=FALSE}
+cat("Number of NA values in Main.Subject.Category column after 1st merge:",length(which(is.na(merge_df2$Main.Subject.Category))))
+```
+
+\newline
+### 2nd merge
+\newline
+It looks like there are quite a few missing values in Main.Subject.Category after the first merge. Let's see if merging on another ISBN type will help. The second merge will combine owned_subscribed_df with the order form data using E-Book.ISBN13.
+\newline
+```{r}
+# Merge again on E-Book.ISBN13
+merge_df3 <- merge(merge_df2, orderForm_df, by.x = "ISBN", by.y = "E.Book.ISBN13", all.x = TRUE)
+
+# assign none NA values in merged columns to NA values in original data frame (merge_df2) columns
+merge_df3$Main.Subject.Category.x[!is.na(merge_df3$Main.Subject.Category.y) & is.na(merge_df3$Main.Subject.Category.x)] <- merge_df3$Main.Subject.Category.y[!is.na(merge_df3$Main.Subject.Category.y)& is.na(merge_df3$Main.Subject.Category.x)]
+
+merge_df3$Print.Publication...Year.x[!is.na(merge_df3$Print.Publication...Year.y)] <- merge_df3$Print.Publication...Year.y[!is.na(merge_df3$Print.Publication...Year.y)]
+```
+
+```{r, echo=FALSE}
+cat("Number of NA values in Main.Subject.Category column after 2nd merge:",length(which(is.na(merge_df3$Main.Subject.Category.x))))
+```
+
+\newline
+Duplicate columns from merging are deleted, and Main.Subject.Category is renamed to Subject and Print.Publication...Year is renamed to Print.Pub.Year to be more concise.
+\newline
+```{r results='hide'}
+# Remove duplicate and unneeded columns 
+merge_df3 <- subset(merge_df3, select = -c(Print.ISBN13.x,E.Book.ISBN13,Print.ISBN13.y,O.Book.ISBN13,Main.Subject.Category.y,Print.Publication...Year.y))
+names(merge_df3)[11] <- "Subject"
+names(merge_df3)[12] <- "Print.Pub.Year"
+
+head(merge_df3)
+```
+
+
+\newline
+### 3rd merge
+\newline
+Merging using e-ISBN13 did not seem to help at all. There is still the same number of missing values for Main.Subject.Category as before. One final merge will be done using Print.ISBN13.
+\newline
+```{r}
+#merge again on Print.ISBN13
+full_df<- merge(merge_df3, orderForm_df, by.x = "ISBN", by.y = "Print.ISBN13", all.x = TRUE)
+
+#assign merge Subject and Print.Pub.Year columns
+full_df$Subject[!is.na(full_df$Main.Subject.Category)] <- full_df$Main.Subject.Category[!is.na(full_df$Main.Subject.Category)]
+full_df$Print.Pub.Year[!is.na(full_df$Print.Publication...Year)] <- full_df$Print.Publication...Year[!is.na(full_df$Print.Publication...Year)]
+
+#convert Subject to factor variable
+full_df$Subject <- as.factor(full_df$Subject)
+```
+
+```{r, echo=FALSE}
+#examine how many observations still have NA values for Subject
+cat("Number of NA values in Subject column after 3rd merge:",length(which(is.na(full_df$Subject))))
+```
+\newline
+Using Print.ISBN13 helped a little. There are 6992 missing values now(compared to 8363 before).
+\newline
+Columns that were duplicated during merging are removed as they do not provide any additional/needed information. 
+\newline
+```{r}
+# Remove unneeded/duplicate columns
+head(full_df)
+full_df <- subset(full_df, select = -c(O.Book.ISBN13,E.Book.ISBN13,Main.Subject.Category,Print.Publication...Year))
+```
+
+Observations originally from a BR3 report with NA values in the Ownership and subject category access will be labeled as "no_access". This represents titles that were not present in the all access titles form due to the University of Wisconsin campuses being denied access.
+```{r}
+full_df$Ownership <- as.character(full_df$Ownership)
+full_df$Ownership[is.na(full_df$Ownership) & full_df$BookReport_Type == 'BR3'] <- "no_access"
+full_df$Ownership <- as.factor(full_df$Ownership)
+
+full_df$Subject <- as.character(full_df$Subject)
+full_df$Subject[is.na(full_df$Subject) & full_df$BookReport_Type == 'BR3'] <- "no_access"
+full_df$Subject <- as.factor(full_df$Subject)
+
+sapply(full_df, function(x) sum(is.na(x)))
+```
+
+Uncomment below to export the dataset to a .csv file
+```{r}
+#write.csv(full_df, file = "Wiley_data.csv")
+```
+
+Rows with NA values for ownership are removed as they do not contribute to the analysis of owned vs subscribed title usage.
+Print.Pub.Year will be removed before moving on as it will not be of use in examining title usage either. 
+```{r}
+full_df <-full_df[complete.cases(full_df$Ownership),]
+full_df <- subset(full_df, select=-c(Print.Pub.Year))
+```
+
+```{r echo=FALSE,results='hide'}
+summary(full_df)
+
+#convert Reporting.Period.Total back to numeric
+full_df$Reporting.Period.Total <- as.numeric(full_df$Reporting.Period.Total)
+
+#convert Campus back to factor
+full_df$Campus <- as.factor(full_df$Campus)
+
+#convert Year back to factor
+full_df$Year <- as.factor(full_df$Year)
+```
+
+\newline
+# Analysis
+***
+\newline
+## Owned vs Subscribed
+***
+\newline
+### Usage by Ownership
+\newline
+Below are a plot and a table detailing the total number of uses per reporting period (year) for owned titles compared to subscribed titles for each unique campus, year, and title combination. The table includes percentage of use by ownership type.
+\newline
+```{r, echo=FALSE}
+ggplot(full_df, aes(x=Ownership, y=Reporting.Period.Total, fill=Ownership)) + geom_bar(stat="identity")+labs(title = "Usage by Ownership", y= "Total Uses")+theme_minimal()+theme(axis.text.x=element_blank())+ ylim(0, 600000)
+```
+
+\newline
+
+```{r , echo=FALSE,render=lemon_print}
+t <- full_df %>%                                        
+    group_by(Ownership) %>%                         
+    summarise_at(vars(Reporting.Period.Total),             
+               list(Total_Uses = sum))
+
+df <- data.frame(t)
+df$Total_Uses <- as.numeric(df$Total_Uses)
+df$Percentage <- round(df$Total_Uses / sum(df$Total_Uses) * 100,2)
+df
+```
+
+\newline
+***
+## Year by Year Comparison
+***
+\newline
+### Usage by Year
+The following plot and table display the total number of title uses by year. The table also displays percentage of usage per year. This summary is cumulative meaning titles are not summed by the year of purchase. Titles were given a value of "owned" based off of the license end date in the UW system all access titles report which gives a list of all titles the UW system has access to as of October 2020. This summary of usage simply accounts for the number of usages owned and subscribed titles the UW system has access to in 2020 got for each year 2014-2018. Note, the same title may be counted multiple times in a year if it was accessed by multiple campuses. 
+
+```{r, echo=FALSE}
+full_df %>%                                        
+    group_by(Year) %>%
+    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+    ggplot(aes(y=total_uses, x=Year)) + geom_bar(position="dodge", stat="identity", fill="springgreen3")+ theme_minimal()+labs(title="Usage by Year",y="Total Uses", x="Year")
+```
+\newline
+```{r, echo=FALSE,render=lemon_print }
+t2 <- full_df %>%                                        
+    group_by(Year) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+
+df2 <- data.frame(t2)
+df2$Total_Uses <- as.numeric(df2$Total_Uses)
+df2$Percentage <- round(df2$Total_Uses/sum(df2$Total_Uses) *100,2)
+
+
+df2
+```
+
+\newline
+### Usage by Year and Ownership: Cumulative
+\newline
+The following plot and table summarizes the total number of owned titles compared to subscribed titles by year. The table includes percentage of use by ownership type per year. 
+\newline
+```{r, echo=FALSE}
+full_df %>%                                        
+    group_by(Year, Ownership) %>%
+    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+    ggplot( aes(fill=Ownership, y=total_uses, x=Year)) + geom_bar(position="dodge", stat="identity")+labs(title = "Usage by Cumulative Year & Ownership", y= "Total Uses")+theme_minimal()
+
+```
+\newline
+```{r, echo=FALSE, render=lemon_print}
+t2b <- full_df %>%                                        
+    group_by(Year, Ownership) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+
+
+df2b <- data.frame(t2b)
+df2b$Total_Uses <- as.numeric(df2b$Total_Uses)
+df2b <- df2b %>%
+  group_by(Year) %>%
+  mutate(Percentage = Total_Uses/sum(Total_Uses))
+      
+df2b$Percentage <- round(df2b$Percentage * 100,2) 
+
+df2b
+```
+\newline
+
+### Owned Titles Usage by Purchase Year: Non-Cumulative
+The following plot and table give a summary of owned titles only. The table includes percentage of owned titles usage by year. These summaries represent the number uses for owned titles based on the year of purchase from 2015-2020. Note that 2020 data was not complete as the data was collected in October, and 2020 usage may look much lower than it actually is.
+\newline
+
+A dataset including only owned titles will be used to visualize and summarized owned title usage. 
+```{r}
+owned <- full_df[full_df$Ownership=="owned",]
+```
+\newline
+```{r, echo=FALSE}
+owned %>%                                        
+    group_by(Purchase.Year) %>%
+    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+    ggplot( aes( y=total_uses, x=Purchase.Year)) + geom_bar(position="dodge", stat="identity", fill="springgreen3")+labs(title = "Owned Titles by Purchase Year", y= "Total Uses",x="Purchase Year")+theme_minimal()
+
+```
+\newline
+```{r , echo=FALSE, render=lemon_print}
+t3 <- owned %>%                                        
+    group_by(Purchase.Year) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+
+df3 <- data.frame(t3)
+df3$Total_Uses <- as.numeric(df3$Total_Uses)
+df3$Percentage <- round(df3$Total_Uses / sum(df3$Total_Uses) * 100,2)
+
+df3
+```
+\newline
+
+All subscribed titles have a purhcase year of 2020 as seen below, so there is nothing further to explore.
+\newline
+```{r, echo=FALSE}
+subscribed <- full_df[full_df$Ownership=="subscribed",]
+
+ts <- subscribed %>%                                        
+    group_by(Purchase.Year) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+kable(ts)
+```
+
+
+***
+\newline
+## Campus Comparison
+***
+\newline
+### Usage by Campus
+The following plot and table display the total number of title uses by campus. The table also displays percentage of usage per campus.
+```{r, echo=FALSE}
+full_df %>%                                        
+    group_by(Campus) %>%
+    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+    ggplot(aes(y=total_uses, x=Campus)) + geom_bar(position="dodge", stat="identity", fill="springgreen3")+ theme_minimal()+labs(title="Usage by Campus",y="Total Uses")+ theme(axis.text.x = element_text(angle = 90)) # Rotate axis labels
+```
+\newline
+```{r, echo=FALSE,render=lemon_print}
+t4 <- full_df %>%                                        
+    group_by(Campus) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+
+df4 <- data.frame(t4)
+df4$Total_Uses <- as.numeric(df4$Total_Uses)
+df4$Percentage <- round(df4$Total_Uses/sum(df4$Total_Uses) *100,2)
+
+
+df4
+```
+\newline
+
+### Usage by Campus and Ownership
+\newline
+The following plot and table depict the total number of uses for owned titles compared to subscribed titles by Campus. The table also includes percentage of usage by ownership type each year.
+\newline
+```{r, echo=FALSE}
+full_df %>%                                        
+    group_by(Campus, Ownership) %>%
+    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+    ggplot(aes(fill=Ownership, y=total_uses, x=Campus)) + geom_bar(position="dodge", stat="identity")+ theme_minimal()+labs(title="Usage by Campus & Ownership",y="Total Uses")+ theme(axis.text.x = element_text(angle = 90)) # Rotate axis labels
+
+```
+\newline
+```{r echo=FALSE, render=lemon_print}
+t4b <- full_df %>%                                        
+    group_by(Campus, Ownership) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+
+df4b <- data.frame(t4)
+df4b$Total_Uses <- as.numeric(df4b$Total_Uses)
+df4b <- df4b %>%
+  group_by(Campus) %>%
+  mutate(Percentage = Total_Uses/sum(Total_Uses))
+      
+df4b$Percentage <- round(df4b$Percentage * 100,2) 
+
+df4
+```
+\newline
+
+
+### Usage by Ownership, Campus, and Year: Cumulative
+The following plots and tables break down the number of uses for owned titles and subscribed titles for each year by campus.
+\newline
+```{r, echo=FALSE,results='hide',fig.keep='all'}
+campuses <- levels(full_df$Campus)
+campuses
+plot_list <- list()
+
+for (i in 1:length(campuses)){
+  df <- full_df[full_df$Campus == campuses[i],]
+  
+  plot_list[[i]] <- df %>%                                        
+                    group_by(Year, Ownership) %>%
+                    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+                    ggplot( aes(fill=Ownership, y=total_uses, x=Year)) + geom_bar(position="dodge", stat="identity") + labs(title = campuses[i], y= "Total Uses")+theme_minimal()
+    
+ 
+}
+
+plot_list
+```
+\newline
+```{r,echo=FALSE,render=lemon_print}
+campuses <- levels(full_df$Campus)
+table_list <- list()
+for (i in 1:length(campuses)){
+  df <- full_df[full_df$Campus == campuses[i],]
+  print(campuses[i])
+  print(kable(table_list[[i]] <- df %>%                                        
+        group_by(Year, Ownership) %>%
+        summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum))))
+
+}
+
+```
+\newline
+
+
+### Owned Titles Usage by Campus and Purchase Year: Non-cumulative
+\newline
+```{r, echo=FALSE,results='hide',fig.keep='all'}
+campuses <- levels(owned$Campus)
+plot_list <- list()
+
+for (i in 1:length(campuses)){
+
+  df <- owned[owned$Campus == campuses[i],]
+  
+  plot_list[[i]] <- df %>%                                        
+                    group_by(Purchase.Year) %>%
+                    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+                    ggplot( aes( y=total_uses, x=Purchase.Year, fill=)) + geom_bar(position="dodge", stat="identity",fill="springgreen3") + labs(title = campuses[i], y= "Total Uses", x="Purchase Year")+theme_minimal()
+  
+}
+
+plot_list
+```
+\newline
+```{r , echo=FALSE,render=lemon_print}
+campuses <- levels(owned$Campus)
+table_list <- list()
+for (i in 1:length(campuses)){
+  df <- owned[owned$Campus == campuses[i],]
+  print(campuses[i])
+  print(kable(table_list [[i]] <- df %>%                                        
+        group_by(Purchase.Year) %>%
+        summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum))))
+
+}
+```
+
+***
+\newline
+## Subject Area Analysis
+***
+\newline
+
+### Usage by Subject Area
+The following plot and table show the usage of titles by subject area. The table also includes percentage of usage by subject
+\newline
+```{r, echo=FALSE}
+full_df <- full_df[complete.cases(full_df$Subject),]
+
+full_df %>%                                        
+    group_by(Subject) %>%
+    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+    ggplot(aes(y=total_uses, x=Subject)) + geom_bar(position="dodge", stat="identity", fill="springgreen3")+ theme_minimal()+labs(title="Usage by Subject",y="Total Uses")+ theme(axis.text.x = element_text(angle = 90)) # Rotate axis labels
+```
+\newline
+```{r, echo=FALSE, render=lemon_print}
+t5 <- full_df %>%                                        
+    group_by(Subject) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+
+df5 <- data.frame(t5)
+df5$Total_Uses <- as.numeric(df5$Total_Uses)
+df5$Percentage <- round(df5$Total_Uses/sum(df5$Total_Uses) *100,2)
+
+
+df5
+```
+\newline
+
+### Subject Area Usage by Ownership
+\newline
+The plot and table show the total uses for owned vs subscribed titles by subject area. The table shows percentage of usage by ownership type for each subject.
+\newline
+```{r, echo=FALSE}
+full_df %>%                                        
+    group_by(Subject, Ownership) %>%
+    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+    ggplot(aes(fill=Ownership, y=total_uses, x=Subject)) + geom_bar(position="dodge", stat="identity")+ theme_minimal()+labs(title="Usage by Subject & Ownership", y="Total Uses", x="Campus")+ theme(axis.text.x = element_text(angle = 90)) # Rotate axis label
+```
+\newline
+```{r, echo=FALSE,render=lemon_print}
+t5b <- full_df %>%                                        
+    group_by(Subject, Ownership) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+
+df5b <- data.frame(t5b)
+df5b$Total_Uses <- as.numeric(df5b$Total_Uses)
+df5b <- df5b %>%
+  group_by(Subject) %>%
+  mutate(Percentage = Total_Uses/sum(Total_Uses))
+      
+df5b$Percentage <- round(df5b$Percentage * 100,2) 
+
+df5b
+```
+\newline
+
+### Subject Area Usage by Campus
+\newline
+The following plots and tables break down the number of uses for owned titles and subscribed titles for each subject area and campus.
+\newline
+```{r, echo=FALSE,results='hide',fig.keep='all'}
+subjects <- levels(full_df$Subject)
+plot_list3 <- list()
+
+for (i in 1:length(subjects)){
+
+  df <- full_df[full_df$Subject == subjects[i],]
+  
+  plot_list3[[i]] <- df %>%                                        
+                    group_by(Campus, Ownership) %>%
+                    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+                    ggplot( aes( y=total_uses, x=Campus, fill=Ownership)) + geom_bar(position="dodge", stat="identity") + labs(title = subjects[i], y= "Total Uses", x="Campus")+theme_minimal() +theme(axis.text.x = element_text(angle = 90))
+  
+}
+
+plot_list3
+```
+\newline
+```{r, echo=FALSE,render=lemon_print}
+subjects <- levels(full_df$Subject)
+
+for (i in 1:length(subjects)){
+  df <- full_df[full_df$Subject == subjects[i],]
+  print(subjects[i])
+  print(kable(df %>%                                        
+    group_by(Campus, Ownership) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum))))
+}
+```
+\newline
+
+### Subject Area Usage by Year:Cumulative
+\newline
+The following demonstrates the total number of uses for owned compared to subscribed titles for each subject category and year (cumulative) .
+\newline
+```{r, echo=FALSE,results='hide',fig.keep='all'}
+subjects <- levels(full_df$Subject)
+plot_list2 <- list()
+
+for (i in 1:length(subjects)){
+  df <- full_df[full_df$Subject == subjects[i],]
+  plot_list2[[i]] <- df %>%                                        
+                    group_by(Year, Ownership) %>%
+                    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+                    ggplot( aes( y=total_uses, x=Year, fill=Ownership)) + geom_bar(position="dodge", stat="identity") + labs(title = subjects[i], y= "Total Uses", x="Year")+theme_minimal() +theme(axis.text.x = element_text(angle = 90))
+    
+}
+
+plot_list2
+```
+\newline
+```{r, echo=FALSE, render=lemon_print}
+subjects <- levels(full_df$Subject)
+
+for (i in 1:length(subjects)){
+  df <- full_df[full_df$Subject == subjects[i],]
+  print(subjects[i])
+  print(kable(df %>%                                        
+    group_by(Year, Ownership) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum))))
+}
+```
+\newline
+
+### Owned Titles Usage by Subject and Purchase Year: Non-cumulative
+\newline
+The following plots and tables show the number of uses for only owned titles grouped by purchase year. 
+```{r, echo=FALSE,results='hide',fig.keep='all'}
+subjects <- levels(owned$Subject)
+plot_list3 <- list()
+
+for (i in 1:length(subjects)){
+
+  df <- owned[owned$Subject == subjects[i],]
+  
+  
+  plot_list3[[i]] <- df %>%                                        
+                    group_by(Purchase.Year) %>%
+                    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+                    ggplot( aes( y=total_uses, x=Purchase.Year)) + geom_bar(position="dodge", stat="identity",fill="springgreen3") + labs(title = subjects[i], y= "Total Uses", x="Purchase Year")+theme_minimal()
+
+}
+
+plot_list3
+
+```
+\newline
+
+```{r, echo=FALSE, render=lemon_print}
+subjects <- levels(owned$Subject)
+
+for (i in 1:length(subjects)){
+  df <- owned[owned$Subject == subjects[i],]
+  print(subjects[i])
+  print(kable(df %>%                                        
+    group_by(Subject, Purchase.Year) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum))))
+}
+
+```
+\newline
+
+### Owned Titles Usage by Subject and Campus
+\newline
+```{r, echo=FALSE,results='hide',fig.keep='all'}
+subjects <- levels(owned$Subject)
+plot_list4 <- list()
+
+for (i in 1:length(subjects)){
+
+  df <- owned[owned$Subject == subjects[i],]
+  
+  
+  plot_list4[[i]] <- df %>%                                        
+                    group_by(Campus) %>%
+                    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+                    ggplot( aes( y=total_uses, x=Campus)) + geom_bar(position="dodge", stat="identity",fill="springgreen3") + labs(title = subjects[i], y= "Total Uses", x="Campus")+theme_minimal()+theme(axis.text.x = element_text(angle = 90))
+
+}
+
+plot_list4
+```
+\newline
+```{r, echo=FALSE, render=lemon_print}
+subjects <- levels(owned$Subject)
+
+for (i in 1:length(subjects)){
+  df <- owned[owned$Subject == subjects[i],]
+  print(subjects[i])
+  print(kable(df %>%                                        
+    group_by(Subject, Campus) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum))))
+}
+```
+

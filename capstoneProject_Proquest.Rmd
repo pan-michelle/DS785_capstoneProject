@@ -1,0 +1,1465 @@
+---
+title: "Capstone Project: Proquest Data"
+output: word_document
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+## Setup:
+```{r}
+# load necessary packages/libraries
+library(openxlsx)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(knitr)
+library(tidyr)
+library(lemon)
+knit_print.data.frame <- lemon_print
+```
+
+```{r}
+# set working directory
+wd = getwd()
+setwd(wd)
+```
+***
+# Clean and Combine Datasets
+*** 
+\newline
+
+\newline
+
+## Campus reports (BR2) 2014-2018
+***
+\newline
+BR2 reports were not available for all campuses for all five years. UW Plattesville did not have any Proquest BR2 reports available for 2014-2018, and UW Stevens Point only had data available for 2018. As a result, these two campuses have not been included. A few other campuses were missing BR2 reports for 2014. This includ UW Green Bay (UWGB), UW LaCrosee (UWLC), and UW Whitewater (UWWW). 
+\newline
+```{r echo=FALSE}
+#load all Proquest BR2 data sets
+
+#create list of files and read in first file
+files <- list.files(path = wd, pattern = ".*BR2.*.xlsx", full.names = T)
+
+#create empty data frame
+proquest_df <- data.frame( Title = character(),
+                           Publisher = factor(),
+                           Platform = factor(),
+                           Campus = factor(),
+                           Year = factor(),
+                           Book.DOI = numeric(),
+                           Proprietary.Identifier = numeric(),
+                           ISBN = character(),
+                           ISSN = character(),
+                           Reporting.Period.Total = numeric(),
+                           Jan = numeric(), 
+                           Feb = numeric(),
+                           Mar = numeric(),
+                           Apr = numeric(),
+                           May = numeric(),
+                           Jun = numeric(),
+                           Jul = numeric(),
+                           Aug = numeric(),
+                           Sep = numeric(),
+                           Oct = numeric(),
+                           Nov = numeric(),
+                           Dec = numeric()
+                           )
+
+# read in each file, remove 1st row (total for all titles), and combine into one data frame
+for (f in files[1:length(files)]){
+  tmp = read.xlsx(f, sheet = 1, startRow = 9,skipEmptyRows=TRUE, colNames = TRUE)
+  tmp <- tmp[-c(1),]
+  proquest_df <- rbind(proquest_df, tmp)
+} 
+```
+
+
+```{r ,echo=FALSE, results-'hide'}
+# Take a look at 1st few rows of data and summary
+head(proquest_df)
+summary(proquest_df)
+```
+\nelwine
+The proquest campus reports will be merged with other data using Book.DOI or Proprietary.Identifier later on. Let's take a look at the number of NA's for each column/variable as well as the observations that have NA values for both Book.DOI and Proprietary.Identifier.
+\newline
+```{r}
+sapply(proquest_df, function(x) sum(is.na(x)))
+dim(proquest_df[is.na(proquest_df$Book.DOI) & is.na(proquest_df$Proprietary.Identifier),])
+```
+\newline
+While Book.DOI is missing 124068 observations and Proprietary.Identifier is missing 33951 observations, no observations are missing values for both Book.Doi and Proprietary.Identifier. Proquest uses both these features interchangeably as "document ids" in other data sets, so either Book.DOI or Proprietary.Identifier should match the document id field(s) in other datasets.
+
+\newline
+Before moving on, a subset of the data is created with only relevant columns.
+\newline
+```{r}
+proquest_df <- subset(proquest_df, select=c(Title,Publisher,Platform,Campus,Year,Book.DOI,Proprietary.Identifier,Reporting.Period.Total))
+```
+
+\newline
+## ProQuest Academic Complete (PQ AC) Dataset
+***
+\newline
+This dataset contains the full list of subscribed titles through Proquest as of Dec 2020. The PQ AC data also provides the subject area that each title falls under. 
+\newline
+```{r}
+# Load data
+full_subscribed_df <- read.xlsx("PQ_AC_FullList.xlsx")
+```
+
+```{r, echo=FALSE, results='hide'}
+# Look at first few rows and summary
+head(full_subscribed_df)
+summary(full_subscribed_df)
+```
+
+\newline
+The other columns/features that the dataset includes will not be helpful for the purposes of this analysis. A subset of full_subscribed_df with only relevant columns has been saved as susbscribed_df. Pub.Short.Date has been renamed Print.Pub.Year as this more accurately represents the column/variable.
+\newline
+```{r}
+subscribed_df <- subset(full_subscribed_df, select = c(DocumentID,Pub.Short.Date,SUBJECT))
+names(subscribed_df)[2] <- "Print.Pub.Year"
+```
+\newline
+Let's take a look at what values are missing for our two columns/variables of interest
+```{r}
+# Check number of NA/missing values in each column
+sapply(subscribed_df, function(x) sum(is.na(x)))
+```
+The PC AQ data and the campus reports will be merged on DocumentID from the PC AQ data set. There should be no issues merging data using DocumentID as it has no missing values. Subject has 136 missing values, but this is not a siginificant portion of the data (136/189298 or ~.09%)
+\newline
+A column will be added with the all values as "subscribed". This will differentiate subscribed titles from owned titles once the data is merged with the combined campus reports dataset (combined BR2 reports dataset). 
+\newline
+```{r}
+subscribed_df$Ownership <- "subscribed"
+```
+
+\newline
+## Combine Campus Reports and PQ AC Data
+***
+\newline
+
+### Combine Data Using Document.ID
+\newline
+Strip Book.DOI and Proprietar.Identifier from proquest_df and DocumentID from subscribed_df of all spaces and non-alphanumeric character for consitency. 
+```{r}
+proquest_df$Book.DOI <- as.character(proquest_df$Book.DOI)
+proquest_df$Book.DOI <- str_replace_all(proquest_df$Book.DOI, fixed(" "), "")
+proquest_df$Book.DOI <- str_replace_all(proquest_df$Book.DOI, "[^[:alnum:]]", "")
+
+proquest_df$Proprietary.Identifier <- as.character(proquest_df$Proprietary.Identifier)
+proquest_df$Proprietary.Identifier <- str_replace_all(proquest_df$Proprietary.Identifier, fixed(" "), "")
+proquest_df$Proprietary.Identifier <- str_replace_all(proquest_df$Proprietary.Identifier, "[^[:alnum:]]", "")
+
+subscribed_df$DocumentID <-  str_replace_all(subscribed_df$DocumentID, fixed(" "), "")
+subscribed_df$DocumentID <-  str_replace_all(subscribed_df$DocumentID, "[^[:alnum:]]", "")
+```
+
+\newline
+In order to gain information about which titles are subscribed and which are acquired through subscription as well as information on what subject area subscribed titles fall under, the PQ AC or subscribed titles data set will be merged with the combined campus reports dataset (proquest_df) using DocumentID to match both Book.DOI and Proprietary.Identifier.
+\newline
+```{r}
+m1 <- merge(proquest_df,subscribed_df, by.x = c("Book.DOI"), by.y = "DocumentID", all.x = TRUE )
+m2 <- merge(m1, subscribed_df, by.x = c("Proprietary.Identifier"), by.y = "DocumentID", all.x = TRUE)
+```
+
+```{r, echo=FALSE}
+cat("Number of NA values is Ownership column after 1st merge: ", length(which(is.na(m1$Ownership))), "\n")
+cat("Number of NA values is Ownership column after 2nd merge: ", length(which(is.na(m2$Ownership.y))))
+```
+\newline
+### Combine Data Using Title
+\newline
+```{r}
+subscribed_df2 <- subset(full_subscribed_df, select = c(Title,SUBJECT))
+```
+\newline
+Make titles in both proquest_df and subscribed_df all lowercase. Strip titles of any non-alphanumeric characters and spaces
+```{r}
+proquest_df$Title <- tolower(proquest_df$Title)
+proquest_df$Title <- str_replace_all(proquest_df$Title, fixed(" "), "")
+proquest_df$Title <- str_replace_all(proquest_df$Title, "[^[:alnum:]]", "")
+
+subscribed_df2$Title <- tolower(subscribed_df2$Title)
+subscribed_df2$Title <- str_replace_all(subscribed_df2$Title, fixed(" "), "")
+subscribed_df2$Title <- str_replace_all(subscribed_df2$Title, "[^[:alnum:]]", "" )
+```
+\newline
+Combine datasets using titles
+```{r}
+subscribed_df2$Ownership <- "subscribed"
+m3 <- merge(proquest_df, subscribed_df2, by.x = "Title", by.y = "Title", all.x = TRUE)
+```
+
+```{r}
+length(which(is.na(m3$Ownership)))
+```
+
+### Merged Data Using the Optimal Method
+There are less matches between the combined campus report data (proquest_df) and the PC AQ data using title to merge the data than when Book.Doi and Proprietary.Identification are used to match document.id. Therefore, matching on Book.Doi/Proprietary.Identification is preferred to matching on titles. 
+
+```{r, results='hide'}
+head(m2)
+# Merge ownership, subject, and print.pub.year column duplicates from 2 merges
+m2$Ownership.y[!is.na(m2$Ownership.x)] <- "subscribed"
+m2$SUBJECT.y[!is.na(m2$SUBJECT.x)] <- m2$SUBJECT.x[!is.na(m2$SUBJECT.x)]
+m2$Print.Pub.Year.y [!is.na(m2$Print.Pub.Year.x)] <- m2$Print.Pub.Year.x[!is.na(m2$Print.Pub.Year.x)]
+
+# Remove duplicate columns and rename merged column
+pq_subscribed <- subset(m2,select = -c(SUBJECT.x,Ownership.x,Print.Pub.Year.x))
+
+names(pq_subscribed)[9] <- "Print.Pub.Year"
+names(pq_subscribed)[10] <- "Subject"
+names(pq_subscribed)[11] <- "Ownership"
+
+head(pq_subscribed)
+```
+\newline
+Let's take a look at the number of unique titles that were able to be identified as subscribed so far.
+\newline
+
+```{r}
+unique_titles <- distinct(pq_subscribed, pq_subscribed$Title, .keep_all=TRUE)
+summary(as.factor(unique_titles$Ownership))
+```
+
+## All Title Access UW System Data
+***
+\newline
+
+This dataset contains all titles as of December 2020 that the UW library system has access to either through ownership, subscription, or other methods.
+```{r}
+all_titles <- read.xlsx("Proquest_AllTitleAccess_UWSYS.xlsx", sheet = 1,startRow = 2,skipEmptyRows=TRUE, colNames = TRUE)
+```
+
+```{r, echo=FALSE, results='hide'}
+head(all_titles)
+summary(all_titles)
+```
+\newline
+A subset of columns relevant to this analysis has been created and stored as all_titles.
+\newline
+```{r}
+all_titles <- subset(all_titles, select = c(Document.ID, ebrary.ID, PubDate, Collection, Owned, Subscribed,Subject))
+```
+\newline
+The Year has been extracted from PubDate and stored in a new column called PubYear. PubDate is removed after the year is stored.
+```{r}
+#convert PubDate to a date type variable
+all_titles$PubDate <- as.Date(all_titles$PubDate)
+
+#extract year and store as PubYear
+all_titles$PubYear <- as.numeric(format(all_titles$PubDate, "%Y"))
+
+#remove PubDate
+all_titles <- all_titles[,-3]
+```
+
+\newline
+The variable Collection has "Subscription: Academic Complete","Subscription: Academic Complete,Subscription: University Press Ebook Subscription" , or "Subscription: University Press Ebook Subscription"  for titles that are subscribed. Those that fall under "Subscription: Academic Complete" should correspond to the titles in the PQ AC data examined previously. Some of the subscribed titles that were not able to be matched using the PQ AC data may be matched using the all titles data. In the all titles data, there are also columns labeled Owned and Subscribed. Let's examine whether Subscribed or Collection is a better indication of a title's Ownership type.
+\newline
+```{r}
+levels(as.factor(all_titles$Collection))
+
+length(which(!is.na(all_titles$Subscribed)))
+length(which(!is.na(all_titles$Collection)))
+```
+\newline
+It looks like there are quite a more missing values in Collection than Subscribed. Thus, Subscribed and Owned will be used to determine the Ownership of titles and Collection will be removed. 
+\newline
+```{r}
+#remove Collection column
+all_titles <- all_titles[,-3]
+```
+\newline
+```{r, echo=FALSE}
+cat("number of NA's for Document.ID: ",length(which(is.na(all_titles$Document.ID))), "\n")
+cat("number of NA's for ebaray.ID: ",length(which(is.na(all_titles$ebrary.ID))))
+```
+\newline
+Let's take a look at the number of titles marked as Subscribed vs Owned in the all_titles data. Note, there are some rows that are marked "No" for both columns. 
+```{r}
+summary(as.factor(all_titles$Subscribed))
+summary(as.factor(all_titles$Owned))
+```
+\newline
+As expected, there is a very small number of owned titles. 
+\newline
+A smaller subset of all_titles is saved with only rows that have a value of "Yes" for either Subscribed or Ownership as there is no interest in titles that are neither owned or subscribed (have values of No in both columns).
+\newline
+```{r}
+all_titles <- all_titles[all_titles$Owned =='Yes'|all_titles$Subscribed == 'Yes',]
+```
+
+\newline
+Before merging the all_titles data with our previously merged campus reports and PQ AC data (pq_subscribed), Document.ID and ebrary-ID will be stripped of any spaces or non alphanumeric characters to remove any accidental/extra symbols or spaces that might be present.
+\newline
+```{r}
+all_titles$Document.ID <- as.character(all_titles$Document.ID)
+all_titles$Document.ID <- str_replace_all(all_titles$Document.ID, fixed(" "), "")
+all_titles$Document.ID <- str_replace_all(all_titles$Document.ID, "[^[:alnum:]]", "")
+
+all_titles$ebrary.ID <- as.character(all_titles$ebrary.ID)
+all_titles$ebrary.ID <- str_replace_all(all_titles$ebrary.ID, fixed(" "), "")
+all_titles$ebrary.ID <- str_replace_all(all_titles$ebrary.ID, "[^[:alnum:]]", "")
+```
+\newline
+
+## Combine Data
+***
+\newline
+The columns Proprietary.Identifier and Book.DOI from the previously merged combined campus BR2 reports and PQ AC data (pq_subscribed) should match with either Document.ID or ebrary.ID in the all titles access dataset. All combinations of the four columns will be used to merge on for the most complete set of data possible.
+\newline
+### Merge on Document.ID and Proprietary.Identifier
+\newline
+A subset of the all titles data with only non-NA values of Document.ID is created and stored as docID to be used for merging.
+```{r}
+docID <- all_titles[!is.na(all_titles$Document.ID),]
+```
+\newline
+pq_subscribed data is merged with doc_ID using Prorietary.Identifier and Document.ID so that all rows/observations of pq_subscribed are retained even if there is not a match between pq_subscribed Proprietary.Identifier and doc_Id Document.ID.
+```{r, results='hide'}
+m4 <- merge(pq_subscribed, docID, by.x = "Proprietary.Identifier", by.y = "Document.ID", all.x = TRUE)
+head(m4)
+summary(m4)
+```
+\newline
+Let's take a look at the number of owned and subscribed titles that were able to be matched.
+\newline
+```{r}
+m4$Owned <- as.factor(m4$Owned)
+summary(m4$Owned)
+
+m4$Subscribed <- as.factor(m4$Subscribed)
+summary(m4$Subscribed)
+```
+\newline
+Titles that have "Yes" for Subscribed and Owned columns are assigned the "subscribed" and "owned" repsectively in the Ownership column. Duplicate subject area columns created during the merge are combined. Columns no longer needed are removed. 
+\newline
+```{r, results='hide'}
+m4$Ownership[m4$Subscribed=="Yes" & !is.na(m4$Subscribed)] <- "subscribed"
+m4$Ownership[m4$Owned =="Yes" & !is.na(m4$Owned)] <- "owned"
+
+m4$Subject.x[!is.na(m4$Subject.y) & is.na(m4$Subject.x)] <- m4$Subject.y[!is.na(m4$Subject.y) & is.na(m4$Subject.x)] 
+m4$Print.Pub.Year[!is.na(m4$PubYear) & is.na(m4$Print.Pub.Year)] <- m4$PubYear[!is.na(m4$PubYear) & is.na(m4$Print.Pub.Year)] 
+
+m4 <- subset(m4, select=-c(ebrary.ID, Subject.y, Owned, Subscribed, PubYear))
+names(m4)[10] <- "Subject"
+
+head(m4)
+```
+\newline
+Let's take a look at the number of observations that still have not been assigned an ownership type.
+```{r, echo=FALSE}
+cat("Number of NA values in Ownership column",length(which(is.na(m4$Ownership))))
+```
+\newline
+### Merge on Document.ID and Book.DOI
+\newline
+Merge using Book.DOi and Document.ID
+```{r, results='hide'}
+m5 <- merge(m4, docID, by.x = "Book.DOI", by.y = "Document.ID", all.x = TRUE)
+head(m5)
+```
+\newline
+Let's take a look at the number of new owned and subscribed titles that were identified from the merge.
+\newline
+```{r}
+m5$Owned <- as.factor(m5$Owned)
+summary(m5$Owned)
+
+m5$Subscribed <- as.factor(m5$Subscribed)
+summary(m5$Subscribed)
+```
+\newline
+Titles that have "Yes" for Subscribed and Owned columns are assigned the "subscribed" and "owned" repsectively in the Ownership column. Duplicate subject area columns created during the merge are combined. Columns no longer needed are removed. 
+\newline
+```{r, results='hide'}
+m5$Ownership[m5$Subscribed=="Yes" & !is.na(m5$Subscribed)] <- "subscribed"
+m5$Ownership[m5$Owned =="Yes" & !is.na(m5$Owned)] <- "owned"
+
+m5$Subject.x[!is.na(m5$Subject.y) & is.na(m5$Subject.x)] <- m5$Subject.y[!is.na(m5$Subject.y) & is.na(m5$Subject.x)] 
+m5$Print.Pub.Year[!is.na(m5$PubYear) & is.na(m5$Print.Pub.Year)] <- m5$PubYear[!is.na(m5$PubYear) & is.na(m5$Print.Pub.Year)] 
+
+m5 <- subset(m5, select=-c(ebrary.ID, Owned, Subscribed, Subject.y,PubYear))
+names(m5)[10] <- "Subject"
+head(m5)
+```
+
+```{r, echo=FALSE}
+cat("Number of NA values in Ownership column",length(which(is.na(m5$Ownership))))
+```
+\newline
+### Merge on ebrary.ID and Proprietary.Identifier.
+\newline
+A smaller subset of data with only non-NA values for ebrary.ID is created for merging using ebrary.ID.
+```{r}
+ebrary <- all_titles[!is.na(all_titles$ebrary.ID),]
+```
+\newline
+Merge using Proprietary.Identifier and ebrary.ID
+```{r, results='hide'}
+m6  <- merge(m5, ebrary, by.x = "Proprietary.Identifier", by.y = "ebrary.ID", all.x = TRUE)
+head(m6)
+```
+\newline
+Take a look at number of new owned and subscribed titles identified from this merge.
+```{r}
+m6$Owned <- as.factor(m6$Owned)
+summary(m6$Owned)
+
+m6$Subscribed <- as.factor(m6$Subscribed)
+summary(m6$Subscribed)
+```
+\newline
+Titles that have "Yes" for Subscribed and Owned columns are assigned the "subscribed" and "owned" repsectively in the Ownership column. Duplicate subject area columns created during the merge are combined. Columns no longer needed are removed. 
+\newline
+```{r, results='hide'}
+m6$Ownership[m6$Subscribed=="Yes" & !is.na(m6$Subscribed)] <- "subscribed"
+m6$Ownership[m6$Owned =="Yes" & !is.na(m6$Owned)] <- "owned"
+
+m6$Subject.x[!is.na(m6$Subject.y) & is.na(m6$Subject.x)] <- m6$Subject.y[!is.na(m6$Subject.y) & is.na(m6$Subject.x)] 
+m6$Print.Pub.Year[!is.na(m6$PubYear) & is.na(m6$Print.Pub.Year)] <- m6$PubYear[!is.na(m6$PubYear) & is.na(m6$Print.Pub.Year)] 
+
+m6 <- subset(m6, select=-c(Document.ID, Subject.y, Owned, Subscribed, PubYear))
+names(m6)[10] <- "Subject"
+head(m6)
+```
+\newline
+Take a look at the number of rows that still have not been assigned an ownership type.
+```{r, echo=FALSE}
+cat("Number of NA values in Ownership column",length(which(is.na(m6$Ownership))))
+```
+\newline
+### Merge on ebrary.ID and Book.DOI
+\newline
+
+Merge using ebrary.ID and Book.DOI
+```{r, results='hide'}
+m7  <- merge(m6, ebrary, by.x = "Book.DOI", by.y = "ebrary.ID", all.x = TRUE)
+head(m7)
+```
+\newline
+Take a look at the number of new owned and subscribed titles identified from this merge
+\newline
+```{r}
+m7$Owned <- as.factor(m7$Owned)
+summary(m7$Owned)
+
+m7$Subscribed <- as.factor(m7$Subscribed)
+summary(m7$Subscribed)
+```
+\newline
+Titles that have "Yes" for Subscribed and Owned columns are assigned the "subscribed" and "owned" repsectively in the Ownership column. Duplicate subject area columns created during the merge are combined. Columns no longer needed are removed. 
+\newline
+```{r, results='hide'}
+m7$Ownership[m7$Subscribed=="Yes" & !is.na(m7$Subscribed)] <- "subscribed"
+m7$Ownership[m7$Owned =="Yes" & !is.na(m7$Owned)] <- "owned"
+
+m7$Subject.x[!is.na(m7$Subject.y) & is.na(m7$Subject.x)] <- m7$Subject.y[!is.na(m7$Subject.y) & is.na(m7$Subject.x)] 
+m7$Print.Pub.Year[!is.na(m7$PubYear) & is.na(m7$Print.Pub.Year)] <- m7$PubYear[!is.na(m7$PubYear) & is.na(m7$Print.Pub.Year)] 
+
+m7 <- subset(m7, select=-c(Document.ID, Subject.y, Subscribed, Owned, PubYear))
+names(m7)[10] <- "Subject"
+head(m7)
+```
+\newline
+Examine the number of titles that still have not been assigned an ownership type and the number of titles with no subject area. 
+```{r}
+cat("Number of NA values in Ownership column",length(which(is.na(m7$Ownership))),"\n")
+cat("Number of NA values in Subject column", length(which(is.na(m7$Subject))))
+```
+\newline
+There are still 24359/158465 or ~15% of observations that were not matched using both the PQ AC data and UW system all access titles data and therefore do not have an ownership type assigned to them. 
+
+m7 will be renamed pq_df and variables that need to be converted to a different variable type will be converted before moving on. 
+```{r}
+pq_df <- m7
+
+cols <- c("Publisher", "Platform","Campus", "Year", "Subject","Ownership","Print.Pub.Year")
+pq_df[cols] <- lapply(pq_df[cols], factor)
+summary(pq_df)
+```
+
+
+\newline
+## Combine Suject Categories
+***
+Next, subject area categories need to be combined before any analysis will be meaningful and interpretable as there are currently 2080 categories. 
+```{r, echo=FALSE,results='hide'}
+length(levels(pq_df$Subject))
+levels(pq_df$Subject)
+```
+\newline
+1.) All categories beginning with Agriculture were combined
+```{r ,echo=FALSE,results='hide'}
+library(rockchalk)
+
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Agriculture", "Agriculture; Business/Management","Agriculture; Business/Management; Economics", "Agriculture; Business/Management; Economics; Environmental Studies","Agriculture; Economics","Agriculture; Economics; Business/Management","Agriculture; Economics; Business/Management; Environmental Studies", "Agriculture; Economics; Environmental Studies","Agriculture; Economics; Environmental Studies; Business/Management","Agriculture; Engineering: Environmental; Engineering","Agriculture; Engineering; Engineering: Environmental; Business/Management", "Agriculture; Environmental Studies","Agriculture; Environmental Studies; Economics","Agriculture; Fine Arts","Agriculture; Health","Agriculture; History","Agriculture; Home Economics","Agriculture; Juvenile Literature","Agriculture; Law","Agriculture; Medicine","Agriculture; Philosophy", "Agriculture; Psychology","Agriculture; Science: Biology/Natural History; Science","Agriculture; Science: Botany; Science","Agriculture; Science: Zoology; Science","Agriculture; Science; Science: Biology/Natural History","Agriculture; Science; Science: Botany","Agriculture; Science; Science: Zoology","Agriculture; Social Science","Agriculture; Social Science; Business/Management","Agriculture; Sport &amp; Recreation"), 
+                               newLabel = "Agriculture")
+```
+\newline
+2.) All categories beginning with Architecture were combined
+```{r ,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject,levs=c("Architecture","ARCHITECTURE","Architecture; Business/Management","Architecture; Education", "Architecture; Engineering: Civil; Engineering","Architecture; Engineering: Construction; Engineering","Architecture; Engineering: Mechanical; Engineering","Architecture; Engineering; Engineering: Construction","Architecture; Environmental Studies","Architecture; Fine Arts","Architecture; Fine Arts; Social Science","Architecture; Geography/Travel","Architecture; Health; Social Science","Architecture; History","Architecture; Law","Architecture; Library Science","Architecture; Military Science","Architecture; Philosophy","Architecture; Religion","Architecture; Social Science","Architecture; Social Science; Health"), newLabel="Architecture")
+```
+\newline
+3.) All categories beginning with Business/Management or Economics were combined
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject,
+                               levs=c("BUSINESS & ECONOMICS","Business/Management","Business/Management; Agriculture","Business/Management; Agriculture; Economics","Business/Management; Agriculture; Economics; Environmental Studies","Business/Management; Agriculture; Environmental Studies","Business/Management; Architecture","Business/Management; Computer Science/IT","Business/Management; Computer Science/IT; Engineering: General; Engineering","Business/Management; Economics","Business/Management; Economics; Agriculture","Business/Management; Economics; Education","Business/Management; Economics; Engineering: Chemical; Engineering","Business/Management; Economics; Engineering; Engineering: General","Business/Management; Economics; Engineering; Engineering: Mechanical","Business/Management; Economics; Engineering; Engineering: Mining","Business/Management; Economics; Environmental Studies","Business/Management; Economics; Environmental Studies; Agriculture","Business/Management; Economics; Fine Arts","Business/Management; Economics; Geography/Travel","Business/Management; Economics; Health","Business/Management; Economics; Health; Social Science","Business/Management; Economics; History","Business/Management; Economics; Law","Business/Management; Economics; Political Science","Business/Management; Economics; Science","Business/Management; Economics; Social Science","Business/Management; Economics; Social Science; Health","Business/Management; Economics; Sport &amp; Recreation","Business/Management; Economics; Tourism/Hospitality","Business/Management; Education","Business/Management; Education; Economics","Business/Management; Engineering: Chemical; Economics; Engineering" ), 
+                               newLabel="Business/Economics")   
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject,
+                               levs=c("Business/Management; Engineering: Chemical; Engineering","Business/Management; Engineering: Chemical; Engineering; Agriculture","Business/Management; Engineering: Civil; Engineering","Business/Management; Engineering: Construction; Engineering","Business/Management; Engineering: Electrical; Engineering","Business/Management; Engineering: General; Computer Science/IT; Engineering","Business/Management; Engineering: General; Engineering","Business/Management; Engineering: General; Engineering; Mathematics","Business/Management; Engineering: Manufacturing; Engineering","Business/Management; Engineering: Mechanical; Engineering","Business/Management; Engineering: Mining; Engineering","Business/Management; Engineering; Engineering: Chemical","Business/Management; Engineering; Engineering: Chemical; Economics","Business/Management; Engineering; Engineering: Civil","Business/Management; Engineering; Engineering: Electrical","Business/Management; Engineering; Engineering: Electrical; Economics","Business/Management; Engineering; Engineering: General","Business/Management; Engineering; Engineering: General; Economics", "Business/Management; Engineering; Engineering: Manufacturing","Business/Management; Engineering; Engineering: Mechanical","Business/Management; Environmental Studies","Business/Management; Environmental Studies; Economics","Business/Management; Environmental Studies; Economics; Agriculture","Business/Management; Fine Arts","Business/Management; General Works/Reference","Business/Management; Geography/Travel","Business/Management; Geography/Travel; Economics","Business/Management; Health; Economics; Social Science","Business/Management; Health; Social Science","Business/Management; Health; Social Science; Economics","Business/Management; History"), 
+                               newLabel="Business/Economics")
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject,
+                               levs=c("Business/Management; History; Agriculture","Business/Management; History; Economics","Business/Management; History; Political Science; Economics","Business/Management; Home Economics","Business/Management; Journalism","Business/Management; Language/Linguistics","Business/Management; Law","Business/Management; Library Science","Business/Management; Library Science; Economics","Business/Management; Literature","Business/Management; Mathematics","Business/Management; Medicine","Business/Management; Medicine; Economics; Pharmacy","Business/Management; Medicine; Pharmacy","Business/Management; Military Science","Business/Management; Military Science; Economics","Business/Management; Nursing","Business/Management; Pharmacy; Medicine","Business/Management; Philosophy","Business/Management; Political Science","Business/Management; Political Science; Agriculture","Business/Management; Political Science; Economics","Business/Management; Political Science; Law","Business/Management; Psychology","Business/Management; Publishing","Business/Management; Religion","Business/Management; Science","Business/Management; Science: Physics; Science","Business/Management; Science; Economics; Science: Biology/Natural History","Business/Management; Science; Science: Biology/Natural History","Business/Management; Science; Science: Geology","Business/Management; Social Science","Business/Management; Social Science; Agriculture","Business/Management; Social Science; Economics","Business/Management; Social Science; Economics; Health","Business/Management; Social Science; Health","Business/Management; Social Science; History","Business/Management; Social Science; Science: General","Business/Management; Sport &amp; Recreation","Business/Management; Sport &amp; Recreation; Economics","Business/Management; Tourism/Hospitality","Business/Management; Tourism/Hospitality; Economics"), 
+                               newLabel="Business/Economics")  
+```
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Economics","Economics; Agriculture; Business/Management","Economics; Agriculture; Environmental Studies","Economics; Agriculture; Environmental Studies; Business/Management","Economics; Business/Management","Economics; Business/Management; Agriculture","Economics; Business/Management; Agriculture; Environmental Studies","Economics; Business/Management; Education","Economics; Business/Management; Engineering: Civil; Engineering","Economics; Business/Management; Engineering: General; Engineering","Economics; Business/Management; Environmental Studies","Economics; Business/Management; Environmental Studies; Agriculture","Economics; Business/Management; Fine Arts","Economics; Business/Management; Geography/Travel","Economics; Business/Management; Health; Social Science","Economics; Business/Management; Philosophy","Economics; Business/Management; Political Science","Economics; Business/Management; Social Science","Economics; Business/Management; Sport &amp; Recreation","Economics; Business/Management; Tourism/Hospitality","Economics; Computer Science/IT","Economics; Computer Science/IT; Business/Management","Economics; Education","Economics; Education; Business/Management","Economics; Education; Social Science","Economics; Engineering: Chemical; Business/Management; Engineering","Economics; Engineering: Chemical; Engineering; Environmental Studies","Economics; Engineering: Chemical; Environmental Studies; Engineering","Economics; Engineering: Chemical; Environmental Studies; Engineering; Business/Management","Economics; Engineering: Civil; Environmental Studies; Engineering","Economics; Engineering: Electrical; Engineering; Business/Management","Economics; Engineering: Environmental; Environmental Studies; Engineering"), 
+                               newLabel = "Business/Economics")
+```
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Economics; Engineering: General; Business/Management; Engineering","Economics; Engineering: General; Engineering","Economics; Engineering: Mechanical; Environmental Studies; Engineering","Economics; Engineering; Business/Management; Engineering: Environmental","Economics; Engineering; Environmental Studies; Engineering: Mechanical","Economics; Environmental Studies","Economics; Environmental Studies; Agriculture","Economics; Environmental Studies; Business/Management","Economics; Environmental Studies; Engineering: Electrical; Engineering","Economics; Environmental Studies; Engineering: Environmental; Engineering","Economics; Environmental Studies; Engineering; Engineering: Electrical","Economics; Environmental Studies; Engineering; Engineering: Environmental","Economics; Environmental Studies; Engineering; Engineering: Mechanical","Economics; Environmental Studies; Engineering; Engineering: Mining","Economics; Environmental Studies; History","Economics; Environmental Studies; Juvenile Literature","Economics; Environmental Studies; Science: Biology/Natural History; Science","Economics; Environmental Studies; Science; Science: Biology/Natural History","Economics; Environmental Studies; Science; Science: Geology","Economics; Environmental Studies; Science; Science: Zoology","Economics; Environmental Studies; Social Science","Economics; Fine Arts","Economics; Fine Arts; Business/Management","Economics; Fine Arts; Literature","Economics; General Works/Reference","Economics; Geography/Travel","Economics; Health; Social Science","Economics; History","Economics; History; Business/Management","Economics; History; Environmental Studies"), 
+                               newLabel = "Business/Economics")
+```
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Economics; Law","Economics; Law; Environmental Studies","Economics; Literature; Environmental Studies","Economics; Mathematics","Economics; Military Science","Economics; Pharmacy; Business/Management; Medicine","Economics; Pharmacy; Medicine; Business/Management","Economics; Philosophy","Economics; Philosophy; Environmental Studies","Economics; Philosophy; Social Science","Economics; Political Science","Economics; Political Science; Business/Management","Economics; Political Science; Environmental Studies","Economics; Political Science; Social Science","Economics; Psychology","Economics; Science","Economics; Science: Biology/Natural History; Environmental Studies; Science","Economics; Science: Geology; Environmental Studies; Science","Economics; Science: Zoology; Environmental Studies; Science","Economics; Science; Business/Management","Economics; Science; Environmental Studies; Science: Biology/Natural History","Economics; Social Science","Economics; Social Science; Business/Management","Economics; Social Science; Environmental Studies","Economics; Social Science; Health","Economics; Social Science; Language/Linguistics","Economics; Sport &amp; Recreation; Business/Management","Economics; Tourism/Hospitality","Economics; Tourism/Hospitality; Business/Management","Economics; Tourism/Hospitality; Environmental Studies"), 
+                               newLabel = "Business/Economics")
+```
+\newline
+4.) All categories beginning with Computer Science/IT were combined
+```{r,echo=FALSE,results='hide'}
+
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Computer Science/IT","Computer Science/IT; Business/Management","Computer Science/IT; Economics","Computer Science/IT; Education","Computer Science/IT; Engineering: Civil; Engineering","Computer Science/IT; Engineering: Electrical; Engineering","Computer Science/IT; Engineering: General; Architecture; Engineering","Computer Science/IT; Engineering: General; Business/Management; Engineering","Computer Science/IT; Engineering: General; Education; Engineering","Computer Science/IT; Engineering: General; Engineering","Computer Science/IT; Engineering: General; Engineering; Business/Management","Computer Science/IT; Engineering: General; Engineering; Social Science","Computer Science/IT; Engineering: Mechanical; Engineering","Computer Science/IT; Engineering; Engineering: Electrical","Computer Science/IT; Engineering; Engineering: General","Computer Science/IT; Fine Arts","Computer Science/IT; General Works/Reference","Computer Science/IT; Geography/Travel","Computer Science/IT; History","Computer Science/IT; Language/Linguistics","Computer Science/IT; Law","Computer Science/IT; Library Science","Computer Science/IT; Mathematics","Computer Science/IT; Military Science","Computer Science/IT; Philosophy","Computer Science/IT; Psychology","Computer Science/IT; Religion","Computer Science/IT; Science","Computer Science/IT; Science: Biology/Natural History; Science","Computer Science/IT; Science: Physics; Science","Computer Science/IT; Science; Science: Physics","Computer Science/IT; Social Science","Computer Science/IT; Social Science; Health; Engineering: General; Engineering","Computer Science/IT; Sport &amp; Recreation","Computer Science/IT; Sport &amp; Recreation; Engineering: General; Engineering","COMPUTERS"),newLabel = "ComputerScience/IT")
+```
+
+\newline
+5.) All categories beginning with Education were combined
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("EDUCATION","Education; Architecture","Education; Business/Management","Education; Business/Management; Economics","Education; Computer Science/IT","Education; Economics","Education; Economics; Business/Management","Education; Engineering: General; Engineering","Education; Environmental Studies","Education; Fine Arts","Education; General Works/Reference","Education; History","Education; History; Social Science","Education; Home Economics","Education; Juvenile Literature","Education; Language/Linguistics","Education; Language/Linguistics; Juvenile Literature","Education; Law","Education; Library Science","Education; Literature","Education; Mathematics","Education; Medicine","Education; Medicine; Psychology","Education; Military Science","Education; Philosophy","Education; Political Science","Education; Psychology","Education; Psychology; Medicine","Education; Religion","Education; Science","Education; Science: Chemistry; Science","Education; Science: General","Education; Science: Physics; Science","Education; Social Science","Education; Sport &amp; Recreation"), 
+                               newLabel = "Education")
+```
+\newline
+6.) All categories beginning with Engineering were combined
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Engineering: Chemical; Agriculture; Engineering","Engineering: Chemical; Economics; Engineering; Business/Management","Engineering: Chemical; Engineering","Engineering: Chemical; Engineering: Civil; Engineering","Engineering: Chemical; Engineering: Construction; Engineering","Engineering: Chemical; Engineering: General; Engineering","Engineering: Chemical; Engineering: Manufacturing; Engineering","Engineering: Chemical; Engineering: Mining; Engineering","Engineering: Chemical; Engineering: Mining; Engineering; Engineering: General","Engineering: Chemical; Engineering; Business/Management","Engineering: Chemical; Engineering; Engineering: Civil","Engineering: Chemical; Engineering; Engineering: Environmental","Engineering: Chemical; Engineering; Engineering: General","Engineering: Chemical; Engineering; Engineering: Manufacturing","Engineering: Chemical; Engineering; Engineering: Mechanical","Engineering: Chemical; Engineering; Engineering: Mining","Engineering: Chemical; Engineering; Health","Engineering: Chemical; Engineering; Health; Engineering: General","Engineering: Chemical; Engineering; Home Economics","Engineering: Chemical; Engineering; Science: Chemistry; Science","Engineering: Chemical; Engineering; Social Science","Engineering: Chemical; Environmental Studies; Economics; Engineering","Engineering: Chemical; Fine Arts; Engineering","Engineering: Chemical; Health; Engineering","Engineering: Chemical; Health; Engineering; Social Science","Engineering: Chemical; Health; Social Science; Engineering","Engineering: Chemical; Home Economics; Engineering","Engineering: Chemical; Law; Engineering","Engineering: Chemical; Medicine; Pharmacy; Engineering","Engineering: Chemical; Pharmacy; Medicine; Engineering","Engineering: Chemical; Philosophy; Engineering"), 
+                               newLabel = "Tech/Engineering")
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Engineering: Chemical; Science: Biology/Natural History; Engineering; Science","Engineering: Chemical; Science: Biology/Natural History; Science; Engineering","Engineering: Chemical; Science: Chemistry; Science; Engineering","Engineering: Chemical; Science: Geology; Science; Engineering","Engineering: Chemical; Science; Engineering; Science: Biology/Natural History","Engineering: Chemical; Science; Engineering; Science: Chemistry","Engineering: Chemical; Science; Science: Biology/Natural History; Engineering","Engineering: Chemical; Science; Science: Chemistry; Engineering","Engineering: Chemical; Social Science; Engineering","Engineering: Civil; Architecture; Engineering","Engineering: Civil; Business/Management; Engineering","Engineering: Civil; Computer Science/IT; Engineering","Engineering: Civil; Engineering","Engineering: Civil; Engineering: Chemical; Engineering","Engineering: Civil; Engineering: Construction; Engineering","Engineering: Civil; Engineering: Electrical; Engineering","Engineering: Civil; Engineering: General; Computer Science/IT; Engineering","Engineering: Civil; Engineering: General; Engineering","Engineering: Civil; Engineering: Manufacturing; Engineering","Engineering: Civil; Engineering: Mechanical; Engineering","Engineering: Civil; Engineering; Agriculture","Engineering: Civil; Engineering; Business/Management","Engineering: Civil; Engineering; Business/Management; Social Science","Engineering: Civil; Engineering; Computer Science/IT","Engineering: Civil; Engineering; Economics; Environmental Studies","Engineering: Civil; Engineering; Engineering: Chemical","Engineering: Civil; Engineering; Engineering: Construction","Engineering: Civil; Engineering; Engineering: Electrical"), 
+                               newLabel = "Tech/Engineering")
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Engineering: Civil; Engineering; Engineering: Environmental","Engineering: Civil; Engineering; Engineering: General","Engineering: Civil; Engineering; Environmental Studies","Engineering: Civil; Engineering; Fine Arts","Engineering: Civil; Engineering; Political Science","Engineering: Civil; Engineering; Science: Chemistry; Science","Engineering: Civil; Engineering; Science: Physics; Science","Engineering: Civil; Engineering; Social Science","Engineering: Civil; Environmental Studies; Economics; Engineering","Engineering: Civil; Environmental Studies; Engineering","Engineering: Civil; Law; Engineering","Engineering: Civil; Mathematics; Engineering","Engineering: Civil; Medicine; Engineering","Engineering: Civil; Science: Biology/Natural History; Science; Engineering","Engineering: Civil; Science: Chemistry; Engineering; Science","Engineering: Civil; Science: Physics; Engineering; Science","Engineering: Civil; Science: Physics; Science; Engineering","Engineering: Civil; Science; Engineering; Science: Biology/Natural History","Engineering: Civil; Science; Science: Anatomy/Physiology; Engineering","Engineering: Civil; Science; Science: Physics; Engineering","Engineering: Civil; Social Science; Engineering","Engineering: Construction; Architecture; Engineering","Engineering: Construction; Business/Management; Engineering","Engineering: Construction; Engineering","Engineering: Construction; Engineering: Civil; Engineering","Engineering: Construction; Engineering: Electrical; Engineering","Engineering: Construction; Engineering: Environmental; Engineering","Engineering: Construction; Engineering: General; Engineering","Engineering: Construction; Engineering; Architecture","Engineering: Construction; Engineering; Engineering: Civil","Engineering: Construction; Engineering; Engineering: Environmental","Engineering: Construction; Engineering; Engineering: Manufacturing","Engineering: Construction; Engineering; Engineering: Mechanical","Engineering: Construction; Engineering; Social Science","Engineering: Electrical; Business/Management; Engineering"), 
+                               newLabel = "Tech/Engineering")
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Engineering: Electrical; Engineering: Chemical; Engineering","Engineering: Electrical; Engineering: Civil; Engineering","Engineering: Electrical; Engineering: General; Engineering","Engineering: Electrical; Engineering: General; Engineering: Civil; Engineering","Engineering: Electrical; Engineering: General; Engineering; Geography/Travel","Engineering: Electrical; Engineering: Manufacturing; Engineering","Engineering: Electrical; Engineering: Mechanical; Engineering","Engineering: Electrical; Engineering; Business/Management", "Engineering: Electrical; Engineering; Computer Science/IT","Engineering: Electrical; Engineering; Engineering: Civil","Engineering: Electrical; Engineering; Engineering: General","Engineering: Electrical; Engineering; Engineering: Mechanical","Engineering: Electrical; Engineering; Environmental Studies; Economics","Engineering: Electrical; Engineering; Law","Engineering: Electrical; Engineering; Mathematics","Engineering: Electrical; Engineering; Medicine","Engineering: Electrical; Engineering; Political Science","Engineering: Electrical; Engineering; Science: General","Engineering: Electrical; Engineering; Science: Physics; Science","Engineering: Electrical; Engineering; Science; Science: Physics","Engineering: Electrical; Engineering; Social Science","Engineering: Electrical; Language/Linguistics; Engineering","Engineering: Electrical; Science: Chemistry; Science; Engineering","Engineering: Electrical; Science: Physics; Engineering; Science","Engineering: Electrical; Science; Engineering; Science: Biology/Natural History","Engineering: Electrical; Science; Engineering; Science: Physics","Engineering: Electrical; Social Science; Engineering","Engineering: Environmental; Business/Management; Economics; Engineering","Engineering: Environmental; Economics; Engineering; Environmental Studies","Engineering: Environmental; Economics; Environmental Studies; Engineering","Engineering: Environmental; Engineering","Engineering: Environmental; Engineering: Chemical; Engineering","Engineering: Environmental; Engineering: Civil; Engineering","Engineering: Environmental; Engineering: General; Engineering","Engineering: Environmental; Engineering: Mining; Engineering","Engineering: Environmental; Engineering; Economics; Environmental Studies","Engineering: Environmental; Engineering; Engineering: Chemical","Engineering: Environmental; Engineering; Engineering: Mining","Engineering: Environmental; Engineering; Environmental Studies","Engineering: Environmental; Engineering; Law","Engineering: Environmental; Engineering; Science; Science: Biology/Natural History","Engineering: Environmental; Engineering; Social Science","Engineering: Environmental; Environmental Studies; Engineering","Engineering: Environmental; Medicine; Engineering","Engineering: Environmental; Science; Engineering; Science: Biology/Natural History","Engineering: Environmental; Science; Science: Biology/Natural History; Engineering","Engineering: Environmental; Science; Science: Botany; Engineering","Engineering: General; Architecture; Engineering"), 
+                               newLabel = "Tech/Engineering")
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Engineering: Electrical; Computer Science/IT; Engineering","Engineering: Electrical; Engineering","Engineering: General; Business/Management; Economics; Engineering","Engineering: General; Business/Management; Engineering","Engineering: General; Business/Management; Engineering; Computer Science/IT","Engineering: General; Business/Management; Engineering; Economics","Engineering: General; Computer Science/IT; Engineering","Engineering: General; Computer Science/IT; Engineering; Mathematics","Engineering: General; Engineering","Engineering: General; Engineering: Chemical; Engineering","Engineering: General; Engineering: Civil; Engineering","Engineering: General; Engineering: Electrical; Engineering","Engineering: General; Engineering: Environmental; Engineering","Engineering: General; Engineering: Manufacturing; Engineering","Engineering: General; Engineering: Mechanical; Engineering","Engineering: General; Engineering: Mining; Engineering","Engineering: General; Engineering; Business/Management","Engineering: General; Engineering; Computer Science/IT","Engineering: General; Engineering; Economics; Business/Management","Engineering: General; Engineering; Engineering: Chemical","Engineering: General; Engineering; Engineering: Civil","Engineering: General; Engineering; Engineering: Electrical","Engineering: General; Engineering; Engineering: Manufacturing","Engineering: General; Engineering; Engineering: Mechanical","Engineering: General; Engineering; Engineering: Mining","Engineering: General; Engineering; History","Engineering: General; Engineering; Law","Engineering: General; Engineering; Literature","Engineering: General; Engineering; Mathematics","Engineering: General; Engineering; Mathematics; Business/Management","Engineering: General; Engineering; Mathematics; Computer Science/IT","Engineering: General; Engineering; Medicine","Engineering: General; Engineering; Military Science","Engineering: General; Engineering; Philosophy","Engineering: General; Engineering; Political Science","Engineering: General; Engineering; Science","Engineering: General; Engineering; Science: Chemistry; Science", "Engineering: General; Engineering; Science; Science: Biology/Natural History","Engineering: General; Engineering; Science; Science: Chemistry","Engineering: General; Engineering; Science; Science: Physics"), 
+                               newLabel = "Tech/Engineering")
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Engineering: General; Engineering; Social Science","Engineering: General; History; Engineering; Sport &amp; Recreation","Engineering: General; Literature; Engineering","Engineering: General; Mathematics; Engineering","Engineering: General; Mathematics; Engineering: Manufacturing; Engineering","Engineering: General; Medicine; Engineering","Engineering: General; Military Science; Engineering","Engineering: General; Political Science; Engineering","Engineering: General; Science: Chemistry; Engineering; Science","Engineering: General; Science: Chemistry; Science; Engineering","Engineering: General; Science: Physics; Engineering; Science","Engineering: General; Science: Physics; Science; Engineering","Engineering: General; Science; Engineering; Science: Geology","Engineering: General; Science; Science: Chemistry; Engineering","Engineering: General; Science; Science: Physics; Engineering","Engineering: General; Social Science; Engineering","Engineering: General; Social Science; Engineering; Computer Science/IT","Engineering: Manufacturing; Business/Management; Economics; Engineering","Engineering: Manufacturing; Business/Management; Engineering","Engineering: Manufacturing; Engineering","Engineering: Manufacturing; Engineering: Chemical; Engineering","Engineering: Manufacturing; Engineering: Civil; Engineering","Engineering: Manufacturing; Engineering: Electrical; Engineering","Engineering: Manufacturing; Engineering: General; Engineering","Engineering: Manufacturing; Engineering: Mechanical; Engineering","Engineering: Manufacturing; Engineering: Mining; Engineering","Engineering: Manufacturing; Engineering; Business/Management","Engineering: Manufacturing; Engineering; Engineering: Chemical","Engineering: Manufacturing; Engineering; Engineering: Civil","Engineering: Manufacturing; Engineering; Engineering: General","Engineering: Manufacturing; Engineering; Engineering: Mechanical","Engineering: Manufacturing; Engineering; Fine Arts","Engineering: Manufacturing; Engineering; General Works/Reference","Engineering: Manufacturing; Engineering; Publishing","Engineering: Manufacturing; Engineering; Social Science","Engineering: Manufacturing; Fine Arts; Engineering","Engineering: Manufacturing; General Works/Reference; Engineering","Engineering: Manufacturing; Medicine; Engineering","Engineering: Manufacturing; Social Science; Engineering","Engineering: Mechanical; Business/Management; Engineering"), 
+                               newLabel = "Tech/Engineering")
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Engineering: Mechanical; Computer Science/IT; Engineering","Engineering: Mechanical; Economics; Environmental Studies; Engineering","Engineering: Mechanical; Engineering","Engineering: Mechanical; Engineering: Construction; Engineering","Engineering: Mechanical; Engineering: Electrical; Engineering","Engineering: Mechanical; Engineering: Environmental; Engineering","Engineering: Mechanical; Engineering: General; Engineering","Engineering: Mechanical; Engineering: Manufacturing; Engineering","Engineering: Mechanical; Engineering; Business/Management","Engineering: Mechanical; Engineering; Business/Management; Military Science; Economics","Engineering: Mechanical; Engineering; Economics; Environmental Studies","Engineering: Mechanical; Engineering; Engineering: Civil","Engineering: Mechanical; Engineering; Engineering: Electrical","Engineering: Mechanical; Engineering; Engineering: General","Engineering: Mechanical; Engineering; Environmental Studies; Economics","Engineering: Mechanical; Engineering; Social Science","Engineering: Mechanical; Environmental Studies; Economics; Engineering","Engineering: Mechanical; Environmental Studies; Engineering","Engineering: Mechanical; Science: Astronomy; Science; Engineering","Engineering: Mechanical; Social Science; Engineering","Engineering: Mining; Engineering","Engineering: Mining; Engineering: General; Engineering","Engineering: Mining; Engineering: Manufacturing; Engineering","Engineering: Mining; Engineering; Business/Management","Engineering: Mining; Engineering; Economics; Business/Management","Engineering: Mining; Engineering; Economics; Environmental Studies","Engineering: Mining; Engineering; Engineering: Chemical","Engineering: Mining; Engineering; Engineering: Environmental", "Engineering: Mining; Engineering; Engineering: General","Engineering: Mining; Engineering; Engineering: Manufacturing","Engineering: Mining; Environmental Studies; Engineering; Economics","Engineering; Agriculture; Engineering: Chemical; Health","Engineering; Architecture; Engineering: Civil","Engineering; Architecture; Engineering: Construction","Engineering; Business/Management; Computer Science/IT; Engineering: General","Engineering; Business/Management; Engineering: Chemical","Engineering; Business/Management; Engineering: Civil","Engineering; Business/Management; Engineering: Environmental","Engineering; Business/Management; Engineering: General", "Engineering; Business/Management; Engineering: General; Computer Science/IT","Engineering; Business/Management; Engineering: Manufacturing","Engineering; Business/Management; Engineering: Mechanical","Engineering; Computer Science/IT; Business/Management; Engineering: General","Engineering; Computer Science/IT; Engineering: Civil","Engineering; Computer Science/IT; Engineering: Construction"   ), 
+                               newLabel = "Tech/Engineering")
+  
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Engineering; Computer Science/IT; Engineering: Electrical","Engineering; Computer Science/IT; Engineering: Environmental","Engineering; Computer Science/IT; Engineering: General","Engineering; Computer Science/IT; Engineering: General; Business/Management","Engineering; Computer Science/IT; Engineering: General; Sport &amp; Recreation","Engineering; Computer Science/IT; Engineering: Mechanical","Engineering; Computer Science/IT; Mathematics; Engineering: General","Engineering; Economics; Business/Management; Engineering: Environmental","Engineering; Economics; Engineering: Chemical; Business/Management","Engineering; Economics; Engineering: Chemical; Environmental Studies","Engineering; Economics; Engineering: Civil; Business/Management","Engineering; Economics; Engineering: Electrical; Environmental Studies","Engineering; Economics; Engineering: Environmental; Environmental Studies","Engineering; Economics; Engineering: General; Business/Management","Engineering; Economics; Engineering: Mechanical; Environmental Studies","Engineering; Economics; Environmental Studies; Engineering: Civil","Engineering; Economics; Environmental Studies; Engineering: Mechanical","Engineering; Education; Engineering: Electrical", "Engineering; Education; Engineering: General","Engineering; Engineering: Chemical","Engineering; Engineering: Chemical; Agriculture","Engineering; Engineering: Chemical; Business/Management","Engineering; Engineering: Chemical; Economics; Environmental Studies","Engineering; Engineering: Chemical; Engineering: Civil","Engineering; Engineering: Chemical; Engineering: General","Engineering; Engineering: Chemical; Engineering: Mechanical","Engineering; Engineering: Chemical; Engineering: Mining","Engineering; Engineering: Chemical; Environmental Studies; Economics","Engineering; Engineering: Chemical; Fine Arts","Engineering; Engineering: Chemical; Health","Engineering; Engineering: Chemical; Home Economics","Engineering; Engineering: Chemical; Mathematics","Engineering; Engineering: Chemical; Philosophy","Engineering; Engineering: Chemical; Science: Chemistry; Science","Engineering; Engineering: Chemical; Science: General","Engineering; Engineering: Chemical; Science; Science: Chemistry","Engineering; Engineering: Chemical; Social Science","Engineering; Engineering: Civil","Engineering; Engineering: Civil; Business/Management","Engineering; Engineering: Civil; Computer Science/IT","Engineering; Engineering: Civil; Economics; Environmental Studies","Engineering; Engineering: Civil; Engineering: Chemical","Engineering; Engineering: Civil; Engineering: Construction","Engineering; Engineering: Civil; Engineering: Electrical","Engineering; Engineering: Civil; Engineering: Environmental","Engineering; Engineering: Civil; Engineering: General","Engineering; Engineering: Civil; Engineering: Manufacturing","Engineering; Engineering: Civil; Engineering: Mechanical","Engineering; Engineering: Civil; Environmental Studies","Engineering; Engineering: Civil; Environmental Studies; Economics"), 
+                               newLabel = "Tech/Engineering")
+  
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Engineering; Engineering: Civil; History","Engineering; Engineering: Civil; Science; Science: Chemistry","Engineering; Engineering: Civil; Science; Science: Physics","Engineering; Engineering: Civil; Social Science","Engineering; Engineering: Construction","Engineering; Engineering: Construction; Architecture","Engineering; Engineering: Construction; Business/Management","Engineering; Engineering: Construction; Engineering: Civil","Engineering; Engineering: Construction; Engineering: Electrical","Engineering; Engineering: Construction; Engineering: General","Engineering; Engineering: Electrical","Engineering; Engineering: Electrical; Business/Management","Engineering; Engineering: Electrical; Computer Science/IT","Engineering; Engineering: Electrical; Economics; Environmental Studies","Engineering; Engineering: Electrical; Engineering: Civil","Engineering; Engineering: Electrical; Engineering: Construction","Engineering; Engineering: Electrical; Engineering: General","Engineering; Engineering: Electrical; Engineering: Manufacturing","Engineering; Engineering: Electrical; Engineering: Mechanical","Engineering; Engineering: Electrical; Environmental Studies; Economics","Engineering; Engineering: Electrical; Fine Arts","Engineering; Engineering: Electrical; Geography/Travel","Engineering; Engineering: Electrical; Mathematics","Engineering; Engineering: Electrical; Science: Physics; Science","Engineering; Engineering: Electrical; Science; Science: Physics","Engineering; Engineering: Electrical; Social Science","Engineering; Engineering: Electrical; Sport &amp; Recreation","Engineering; Engineering: Environmental","Engineering; Engineering: Environmental; Economics; Business/Management","Engineering; Engineering: Environmental; Economics; Environmental Studies","Engineering; Engineering: Environmental; Engineering: Chemical","Engineering; Engineering: Environmental; Engineering: Civil","Engineering; Engineering: Environmental; Engineering: Construction","Engineering; Engineering: Environmental; Engineering: General","Engineering; Engineering: Environmental; Engineering: Mining","Engineering; Engineering: Environmental; Environmental Studies","Engineering; Engineering: Environmental; Law","Engineering; Engineering: Environmental; Science: Biology/Natural History; Science","Engineering; Engineering: Environmental; Science; Science: Biology/Natural History","Engineering; Engineering: Environmental; Science; Science: Geology"), 
+                               newLabel = "Tech/Engineering")
+  
+```
+
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("TECHNOLOGY & ENGINEERING","Engineering; Engineering: Environmental; Social Science","Engineering; Engineering: General","Engineering; Engineering: General; Architecture","Engineering; Engineering: General; Business/Management","Engineering; Engineering: General; Business/Management; Computer Science/IT","Engineering; Engineering: General; Computer Science/IT","Engineering; Engineering: General; Engineering: Chemical","Engineering; Engineering: General; Engineering: Civil","Engineering; Engineering: General; Engineering: Electrical","Engineering; Engineering: General; Engineering: Environmental","Engineering; Engineering: General; Engineering: Manufacturing","Engineering; Engineering: General; Engineering: Mechanical","Engineering; Engineering: General; Engineering: Mechanical; Military Science","Engineering; Engineering: General; Geography/Travel","Engineering; Engineering: General; Health","Engineering; Engineering: General; Language/Linguistics","Engineering; Engineering: General; Literature","Engineering; Engineering: General; Mathematics","Engineering; Engineering: General; Mathematics; Computer Science/IT","Engineering; Engineering: General; Mathematics; Science: General","Engineering; Engineering: General; Medicine","Engineering; Engineering: General; Military Science","Engineering; Engineering: General; Military Science; Engineering: Mechanical","Engineering; Engineering: General; Science: General","Engineering; Engineering: General; Science: Physics; Science","Engineering; Engineering: General; Science; Science: Astronomy","Engineering; Engineering: General; Science; Science: Botany", "Engineering; Engineering: General; Science; Science: Chemistry","Engineering; Engineering: General; Science; Science: Physics","Engineering; Engineering: General; Social Science","Engineering; Engineering: Manufacturing","Engineering; Engineering: Manufacturing; Business/Management","Engineering; Engineering: Manufacturing; Computer Science/IT","Engineering; Engineering: Manufacturing; Computer Science/IT; Engineering: General","Engineering; Engineering: Manufacturing; Engineering: Chemical","Engineering; Engineering: Manufacturing; Engineering: Civil","Engineering; Engineering: Manufacturing; Engineering: Construction","Engineering; Engineering: Manufacturing; Engineering: Electrical","Engineering; Engineering: Manufacturing; Fine Arts","Engineering; Engineering: Manufacturing; General Works/Reference"), 
+                               newLabel = "Tech/Engineering")
+  
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Engineering; Engineering: Manufacturing; Geography/Travel","Engineering; Engineering: Manufacturing; Medicine","Engineering; Engineering: Manufacturing; Publishing","Engineering; Engineering: Manufacturing; Science: Chemistry; Science","Engineering; Engineering: Mechanical","Engineering; Engineering: Mechanical; Business/Management","Engineering; Engineering: Mechanical; Computer Science/IT","Engineering; Engineering: Mechanical; Economics; Environmental Studies","Engineering; Engineering: Mechanical; Engineering: Chemical","Engineering; Engineering: Mechanical; Engineering: Electrical","Engineering; Engineering: Mechanical; Engineering: Electrical; Engineering: General","Engineering; Engineering: Mechanical; Engineering: General","Engineering; Engineering: Mechanical; Engineering: Manufacturing","Engineering; Engineering: Mechanical; Environmental Studies; Economics","Engineering; Engineering: Mechanical; Science; Science: Chemistry","Engineering; Engineering: Mechanical; Social Science","Engineering; Engineering: Mining","Engineering; Engineering: Mining; Business/Management; Economics","Engineering; Engineering: Mining; Engineering: Chemical","Engineering; Engineering: Mining; Engineering: Environmental","Engineering; Engineering: Mining; Environmental Studies; Economics","Engineering; Environmental Studies; Economics; Engineering: Civil","Engineering; Environmental Studies; Economics; Engineering: Environmental","Engineering; Environmental Studies; Economics; Engineering: Mining","Engineering; Environmental Studies; Engineering: Chemical; Economics","Engineering; Environmental Studies; Engineering: Civil","Engineering; Environmental Studies; Engineering: Construction","Engineering; Environmental Studies; Engineering: Electrical","Engineering; Environmental Studies; Engineering: Environmental","Engineering; Environmental Studies; Engineering: Mechanical; Economics","Engineering; Fine Arts; Computer Science/IT; Engineering: General","Engineering; Fine Arts; Engineering: Construction","Engineering; Fine Arts; Engineering: Manufacturing","Engineering; General Works/Reference; Engineering: Manufacturing","Engineering; Geography/Travel; Engineering: General","Engineering; Health; Engineering: Chemical","Engineering; History; Engineering: Chemical","Engineering; Home Economics; Engineering: Chemical","Engineering; Home Economics; Engineering: General","Engineering; Home Economics; Engineering: Mechanical; Engineering: Construction","Engineering; Law; Engineering: Chemical; Social Science","Engineering; Literature; Engineering: General","Engineering; Mathematics; Engineering: Civil","Engineering; Mathematics; Engineering: Electrical","Engineering; Mathematics; Engineering: General"), 
+                               newLabel = "Tech/Engineering")
+  
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Engineering; Mathematics; Engineering: General; Business/Management","Engineering; Mathematics; Engineering: General; Computer Science/IT","Engineering; Medicine; Engineering: Environmental","Engineering; Medicine; Engineering: General","Engineering; Medicine; Pharmacy; Engineering: Chemical","Engineering; Military Science; Engineering: General","Engineering; Military Science; Engineering: Mechanical; History","Engineering; Philosophy; Engineering: Civil","Engineering; Philosophy; Engineering: Mechanical","Engineering; Science: Astronomy; Engineering: Civil; Science","Engineering; Science: Biology/Natural History; Engineering: Chemical; Science","Engineering; Science: Biology/Natural History; Engineering: Environmental; Science","Engineering; Science: Biology/Natural History; Engineering: General; Science","Engineering; Science: Biology/Natural History; Science; Engineering: Chemical","Engineering; Science: Biology/Natural History; Science; Engineering: General","Engineering; Science: Chemistry; Engineering: Chemical; Science","Engineering; Science: Chemistry; Engineering: Environmental; Science","Engineering; Science: Chemistry; Science; Engineering: Chemical","Engineering; Science: Chemistry; Science; Engineering: Electrical","Engineering; Science: Chemistry; Science; Engineering: General","Engineering; Science: Geology; Engineering: Environmental; Science","Engineering; Science: Physics; Engineering: Chemical; Science","Engineering; Science: Physics; Engineering: Civil; Science","Engineering; Science: Physics; Engineering: Electrical; Science","Engineering; Science: Physics; Engineering: General; Science","Engineering; Science; Engineering: Chemical; Science: Biology/Natural History","Engineering; Science; Engineering: Chemical; Science: Botany","Engineering; Science; Engineering: Chemical; Science: Physics","Engineering; Science; Engineering: Electrical; Science: Physics","Engineering; Science; Engineering: General","Engineering; Science; Engineering: General; Science: Physics","Engineering; Science; Engineering: General; Science: Zoology","Engineering; Science; Science: Anatomy/Physiology; Engineering: Chemical","Engineering; Science; Science: Astronomy; Engineering: Electrical","Engineering; Science; Science: Biology/Natural History; Engineering: Chemical","Engineering; Science; Science: Chemistry; Engineering: Chemical","Engineering; Science; Science: Chemistry; Engineering: Civil","Engineering; Science; Science: Chemistry; Engineering: Environmental","Engineering; Science; Science: Physics; Engineering: Civil","Engineering; Social Science; Computer Science/IT; Engineering: General","Engineering; Social Science; Engineering: Chemical","Engineering; Social Science; Engineering: Civil","Engineering; Social Science; Engineering: Construction","Engineering; Social Science; Engineering: Electrical","Engineering; Social Science; Engineering: Environmental","Engineering; Social Science; Engineering: General","Engineering; Social Science; Engineering: Manufacturing","Engineering; Social Science; Engineering: Mechanical","Engineering; Sport &amp; Recreation; Engineering: General"), 
+                               newLabel = "Tech/Engineering")
+```
+\newline
+7.) Combine all categories beginning with Environmental Studies
+```{r ,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Environmental Studies","Environmental Studies; Agriculture","Environmental Studies; Agriculture; Economics","Environmental Studies; Agriculture; Economics; Business/Management","Environmental Studies; Architecture","Environmental Studies; Business/Management","Environmental Studies; Business/Management; Economics","Environmental Studies; Business/Management; Economics; Agriculture","Environmental Studies; Economics","Environmental Studies; Economics; Agriculture","Environmental Studies; Economics; Business/Management","Environmental Studies; Economics; Engineering: Environmental; Engineering","Environmental Studies; Economics; Engineering: Mechanical; Engineering","Environmental Studies; Economics; Engineering; Engineering: Environmental","Environmental Studies; Economics; Engineering; Engineering: Mechanical","Environmental Studies; Economics; History","Environmental Studies; Economics; Political Science","Environmental Studies; Economics; Science: Biology/Natural History; Science","Environmental Studies; Economics; Science; Science: Biology/Natural History","Environmental Studies; Economics; Science; Science: Zoology","Environmental Studies; Education","Environmental Studies; Engineering: Environmental; Engineering","Environmental Studies; Engineering; Economics; Engineering: Mechanical","Environmental Studies; Engineering; Engineering: Construction","Environmental Studies; Engineering; Engineering: Environmental","Environmental Studies; Geography/Travel","Environmental Studies; Health; Social Science","Environmental Studies; History","Environmental Studies; Law","Environmental Studies; Law; Economics","Environmental Studies; Literature","Environmental Studies; Medicine","Environmental Studies; Philosophy","Environmental Studies; Science: Biology/Natural History; Economics; Science","Environmental Studies; Science: Biology/Natural History; Science","Environmental Studies; Science: Biology/Natural History; Science; Economics","Environmental Studies; Science: Geology; Economics; Science","Environmental Studies; Science: Geology; Science","Environmental Studies; Science: Physics; Science","Environmental Studies; Science: Zoology; Economics; Science" ), 
+                               newLabel = "Environmental Studies")
+
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Environmental Studies; Science; Economics; Science: Biology/Natural History","Environmental Studies; Science; Economics; Science: Geology","Environmental Studies; Science; Science: Biology/Natural History","Environmental Studies; Science; Science: Geology","Environmental Studies; Science; Science: Physics","Environmental Studies; Social Science","Environmental Studies; Social Science; Economics","Environmental Studies; Social Science; Health"), 
+                               newLabel = "Environmental Studies")
+```
+\newline
+8.) Combine all categories beginning with Fine Arts
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Fine Arts","Fine Arts; Agriculture","Fine Arts; Architecture","Fine Arts; Business/Management","Fine Arts; Computer Science/IT","Fine Arts; Economics","Fine Arts; Economics; Business/Management","Fine Arts; Education","Fine Arts; Engineering: Chemical; Engineering","Fine Arts; Engineering: Civil; Engineering","Fine Arts; Engineering: Electrical; Engineering","Fine Arts; Engineering: Manufacturing; Engineering","Fine Arts; Engineering; Engineering: Chemical","Fine Arts; Engineering; Engineering: Environmental","Fine Arts; Environmental Studies","Fine Arts; Fiction","Fine Arts; General Works/Reference", "Fine Arts; Geography/Travel","Fine Arts; History","Fine Arts; Home Economics","Fine Arts; Journalism","Fine Arts; Language/Linguistics","Fine Arts; Language/Linguistics; Fiction","Fine Arts; Law","Fine Arts; Library Science","Fine Arts; Literature","Fine Arts; Literature; Fiction","Fine Arts; Medicine","Fine Arts; Museums","Fine Arts; Philosophy","Fine Arts; Political Science","Fine Arts; Psychology","Fine Arts; Publishing","Fine Arts; Religion","Fine Arts; Science","Fine Arts; Science: General","Fine Arts; Science: Geology; Science","Fine Arts; Science: Physics; Science","Fine Arts; Science; Science: Biology/Natural History","Fine Arts; Science; Science: Geology","Fine Arts; Social Science","Fine Arts; Social Science; Business/Management","Fine Arts; Social Science; History","Fine Arts; Social Science; Literature","Fine Arts; Sport &amp; Recreation"), 
+                               newLabel = "Fine Arts")
+```
+\newline
+9.) Combine all categories beginning with General Works/Reference, Military Science, or Museums as Reference/Other
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("General Works/Reference","General Works/Reference; Business/Management","General Works/Reference; Computer Science/IT","General Works/Reference; Education","General Works/Reference; Engineering: General; Engineering","General Works/Reference; Engineering: General; Engineering; Mathematics","General Works/Reference; Engineering: Manufacturing; Engineering","General Works/Reference; Engineering; Engineering: Electrical","General Works/Reference; Engineering; Engineering: Manufacturing","General Works/Reference; Fine Arts" ,"General Works/Reference; History","General Works/Reference; Journalism","General Works/Reference; Language/Linguistics","General Works/Reference; Law","General Works/Reference; Library Science","General Works/Reference; Literature","General Works/Reference; Mathematics","General Works/Reference; Military Science","General Works/Reference; Philosophy", "General Works/Reference; Political Science","General Works/Reference; Psychology","General Works/Reference; Publishing", "General Works/Reference; Religion","General Works/Reference; Science","General Works/Reference; Social Science","REFERENCE"), 
+                               newLabel = "Reference")
+```
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Military Science","Military Science; Computer Science/IT; Political Science","Military Science; Education","Military Science; Engineering: General; Engineering","Military Science; Engineering; Engineering: General","Military Science; Engineering; Engineering: General; Engineering: Mechanical","Military Science; Engineering; Engineering: Mechanical; Engineering: General","Military Science; Fine Arts","Military Science; History","Military Science; Law","Military Science; Medicine","Military Science; Philosophy","Military Science; Political Science","Military Science; Science: Physics; Science","Military Science; Social Science","Museums","Museums; Science","Museums; Social Science"),
+                               newLabel = "Reference/Other")
+```
+\newline
+10.) Combine all categories beginning with Geology/Travel as Travel
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Geography/Travel","Geography/Travel; Business/Management","Geography/Travel; Computer Science/IT","Geography/Travel; Economics","Geography/Travel; Economics; Business/Management","Geography/Travel; Economics; Environmental Studies","Geography/Travel; Economics; History","Geography/Travel; Economics; Social Science","Geography/Travel; Education","Geography/Travel; Engineering: General; Engineering","Geography/Travel; Engineering; Engineering: Electrical","Geography/Travel; Engineering; Engineering: General","Geography/Travel; Environmental Studies","Geography/Travel; Fine Arts","Geography/Travel; General Works/Reference","Geography/Travel; History","Geography/Travel; History; Political Science","Geography/Travel; History; Science: Geology; Science","Geography/Travel; History; Social Science","Geography/Travel; Language/Linguistics","Geography/Travel; Law","Geography/Travel; Library Science","Geography/Travel; Literature","Geography/Travel; Medicine; Psychology","Geography/Travel; Philosophy","Geography/Travel; Political Science","Geography/Travel; Psychology","Geography/Travel; Religion","Geography/Travel; Science","Geography/Travel; Science: Astronomy; Science", "Geography/Travel; Science: Biology/Natural History; Science","Geography/Travel; Science: Geology; Science","Geography/Travel; Science; Science: Astronomy","Geography/Travel; Science; Science: Biology/Natural History","Geography/Travel; Science; Science: Geology","Geography/Travel; Social Science","Geography/Travel; Sport &amp; Recreation","Geography/Travel; Tourism/Hospitality"), 
+                               newLabel = "Geology/Travel")
+```
+\newline
+11.) combine all categories beginning with Health & Fitness or Health as Health/Fitness
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("HEALTH & FITNESS","Health; Agriculture","Health; Business/Management","Health; Business/Management; Economics","Health; Business/Management; Social Science","Health; Business/Management; Social Science; Economics","Health; Economics; Business/Management; Social Science","Health; Economics; Social Science","Health; Economics; Social Science; Business/Management","Health; Education; Social Science","Health; Engineering: Chemical; Engineering","Health; Engineering; Engineering: Chemical","Health; Engineering; Medicine; Engineering: Environmental","Health; Environmental Studies; Social Science","Health; History","Health; History; Social Science","Health; Home Economics","Health; Law; Social Science","Health; Literature; Fiction","Health; Mathematics; Social Science","Health; Medicine","Health; Medicine; Pharmacy; Social Science","Health; Medicine; Psychology; Social Science","Health; Medicine; Social Science","Health; Medicine; Social Science; Pharmacy","Health; Medicine; Social Science; Psychology","Health; Military Science","Health; Military Science; Social Science","Health; Nursing","Health; Nursing; Social Science","Health; Philosophy"), 
+                               newLabel = "Health/Fitness")
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Health","Health; Philosophy; Social Science","Health; Political Science; Social Science","Health; Psychology","Health; Psychology; Medicine","Health; Psychology; Social Science; Medicine","Health; Science: Anatomy/Physiology; Social Science; Science","Health; Science: Biology/Natural History; Science","Health; Science: Biology/Natural History; Science; Science: Anatomy/Physiology","Health; Science: Biology/Natural History; Social Science; Science","Health; Science: Botany; Science","Health; Science; Science: Biology/Natural History","Health; Science; Science: Biology/Natural History; Social Science","Health; Science; Science: Botany","Health; Social Science","Health; Social Science; Architecture","Health; Social Science; Business/Management","Health; Social Science; Business/Management; Economics","Health; Social Science; Business/Management; Environmental Studies; Economics","Health; Social Science; Economics","Health; Social Science; Economics; Business/Management","Health; Social Science; Education","Health; Social Science; Environmental Studies","Health; Social Science; Law","Health; Social Science; Medicine","Health; Social Science; Medicine; Pharmacy","Health; Social Science; Medicine; Psychology","Health; Social Science; Nursing","Health; Social Science; Philosophy","Health; Social Science; Political Science","Health; Social Science; Psychology","Health; Social Science; Psychology; Medicine","Health; Sport &amp; Recreation","Health; Sport &amp; Recreation; Social Science","Health; Psychology; Medicine; Social Science"), 
+                               newLabel = "Health/Fitness")
+```
+
+
+\newline
+12.) Combine all categories beginning with history
+```{r ,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("History","HISTORY","History; Agriculture","History; Business/Management","History; Business/Management; Economics","History; Economics","History; Economics; Environmental Studies","History; Education","History; Engineering: Manufacturing; Engineering","History; Engineering: Mining; Engineering","History; Engineering; Engineering: Manufacturing","History; Environmental Studies","History; Environmental Studies; Economics","History; Fiction","History; Fine Arts","History; General Works/Reference","History; Geography/Travel","History; Home Economics","History; Juvenile Literature","History; Language/Linguistics","History; Language/Linguistics; Fiction","History; Law","History; Law; Political Science","History; Library Science","History; Literature","History; Mathematics","History; Medicine","History; Military Science","History; Museums","History; Philosophy","History; Political Science","History; Political Science; Geography/Travel","History; Political Science; Social Science" ), 
+                               newLabel = "History")
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("History; Psychology","History; Psychology; Medicine","History; Religion","History; Science: Astronomy; Science","History; Science: Biology/Natural History; Science","History; Science: Geology; Science","History; Science; Science: Astronomy","History; Science; Science: Botany","History; Science; Science: Chemistry","History; Science; Science: Geology","History; Social Science","History; Social Science; Economics","History; Social Science; Fiction","History; Social Science; Geography/Travel","History; Social Science; Health","History; Social Science; Military Science","History; Sport &amp; Recreation" ), 
+                               newLabel = "History")
+```
+
+\newline
+13.) Combine all categories beginning with Home Economics or House & Home as Home
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Home Economics","Home Economics; Agriculture","Home Economics; Business/Management","Home Economics; Economics; Business/Management","Home Economics; Education","Home Economics; Engineering: Chemical; Engineering","Home Economics; Fine Arts","Home Economics; Health","Home Economics; Medicine","Home Economics; Medicine; Pharmacy","Home Economics; Medicine; Psychology","Home Economics; Philosophy","Home Economics; Psychology","Home Economics; Psychology; Medicine","Home Economics; Science: Biology/Natural History; Science","Home Economics; Social Science","HOUSE & HOME" ), 
+                               newLabel = "Home")
+```
+
+\newline
+14.) combine all categoreis beginning with Journalism or Publishing as Journalism/Publishing
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Journalism","Journalism; Engineering: General; Engineering","Journalism; Fine Arts","Journalism; General Works/Reference","Journalism; Geography/Travel","Journalism; History","Journalism; Law","Journalism; Military Science","Journalism; Philosophy","Journalism; Political Science", "Journalism; Religion","Journalism; Social Science","Journalism; Sport &amp; Recreation","Publishing","Publishing; Business/Management","Publishing; Computer Science/IT","Publishing; Fine Arts","Publishing; Journalism","Publishing; Literature","Publishing; Religion", "Journalism"),
+                               newLabel = "Journalism/Publishing")
+```
+
+\newline
+15.) Combine all categories beginning with Language Arts
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("LANGUAGE ARTS & DISCIPLINES","Language/Linguistics","Language/Linguistics; Business/Management","Language/Linguistics; Computer Science/IT","Language/Linguistics; Education","Language/Linguistics; Fiction","Language/Linguistics; Fine Arts","Language/Linguistics; Fine Arts; Literature","Language/Linguistics; General Works/Reference","Language/Linguistics; History","Language/Linguistics; Juvenile Literature","Language/Linguistics; Law","Language/Linguistics; Library Science","Language/Linguistics; Literature","Language/Linguistics; Literature; Fiction","Language/Linguistics; Medicine","Language/Linguistics; Museums","Language/Linguistics; Philosophy","Language/Linguistics; Political Science","Language/Linguistics; Psychology","Language/Linguistics; Psychology; Philosophy","Language/Linguistics; Religion","Language/Linguistics; Religion; Fiction","Language/Linguistics; Science: General","Language/Linguistics; Science: Physics; Science","Language/Linguistics; Science; Science: Anatomy/Physiology","Language/Linguistics; Social Science","Language/Linguistics; Sport &amp; Recreation"),
+                               newLabel = "Language Arts")
+```
+\newline
+16.) Combine all categories beginning with Law or Policital Science as Law/Political Science
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Law","LAW","Law; Agriculture","Law; Business/Management","Law; Business/Management; Economics","Law; Economics","Law; Economics; Business/Management","Law; Education","Law; Engineering: General; Engineering","Law; Environmental Studies","Law; Health; Medicine","Law; Health; Social Science","Law; History","Law; Literature","Law; Mathematics","Law; Medicine","Law; Military Science","Law; Political Science","Law; Psychology","Law; Religion","Law; Social Science" ),
+                               newLabel = "Law/Political Science")
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Political Science","POLITICAL SCIENCE","Political Science; Business/Management","Political Science; Business/Management; Agriculture","Political Science; Business/Management; Economics","Political Science; Computer Science/IT","Political Science; Economics","Political Science; Economics; Business/Management","Political Science; Education","Political Science; Engineering: General; Engineering","Political Science; Engineering; Engineering: Civil","Political Science; Engineering; Engineering: Mechanical","Political Science; Environmental Studies","Political Science; Environmental Studies; Economics","Political Science; Fiction","Political Science; Fine Arts", "Political Science; General Works/Reference","Political Science; Geography/Travel","Political Science; History","Political Science; History; Law","Political Science; Juvenile Literature","Political Science; Language/Linguistics","Political Science; Law","Political Science; Literature", "Political Science; Mathematics","Political Science; Military Science","Political Science; Psychology","Political Science; Religion","Political Science; Science","Political Science; Science: Biology/Natural History; Science","Political Science; Social Science","Political Science; Social Science; Economics","Political Science; Social Science; Health","Political Science; Social Science; History"),
+                               newLabel = "Law/Political Science")
+``` 
+\newline
+17.) Combine all categories beginning with library science
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Library Science","Library Science; Business/Management","Library Science; Computer Science/IT","Library Science; Education","Library Science; Fiction","Library Science; Fine Arts","Library Science; General Works/Reference","Library Science; Geography/Travel","Library Science; History","Library Science; Publishing","Library Science; Religion","Library Science; Social Science"),
+                               newLabel = "Library Science")
+```
+\newline
+18.) Combine all categories beginning with literary criticism
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Literature","Literature; Business/Management","Literature; Economics","Literature; Economics; Business/Management","Literature; Education","Literature; Engineering: General; Engineering","Literature; Engineering; Engineering: Environmental","Literature; Engineering; Engineering: General","Literature; Fiction","Literature; Fiction; Juvenile Literature","Literature; Fine Arts","Literature; Fine Arts; Fiction","Literature; General Works/Reference","Literature; General Works/Reference; Fiction","Literature; Geography/Travel","Literature; History","Literature; History; Fiction","Literature; Home Economics","Literature; Journalism","Literature; Juvenile Literature","Literature; Language/Linguistics","Literature; Language/Linguistics; Fiction","Literature; Law","Literature; Mathematics","Literature; Military Science","Literature; Nursing","Literature; Philosophy","Literature; Philosophy; Fiction","Literature; Political Science", "Literature; Political Science; Fiction","Literature; Psychology","Literature; Publishing","Literature; Religion","Literature; Science","Literature; Science: General","Literature; Science: Geology; Science","Literature; Science; Science: Astronomy","Literature; Social Science","Literature; Social Science; Fine Arts; Fiction","Literature; Social Science; Juvenile Literature","Literature; Sport &amp; Recreation","LITERARY COLLECTIONS","LITERARY CRITICISM"),
+                               newLabel = "Literary Criticism")
+```
+\newline
+19.) Combine all categories beginning with mathematics
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Mathematics","MATHEMATICS","Mathematics; Business/Management","Mathematics; Computer Science/IT","Mathematics; Economics","Mathematics; Education","Mathematics; Engineering: Electrical; Engineering","Mathematics; Engineering: General; Engineering","Mathematics; Engineering: General; Engineering; Business/Management","Mathematics; Engineering: Mechanical; Engineering","Mathematics; Engineering; Engineering: Chemical","Mathematics; Engineering; Engineering: Electrical","Mathematics; Engineering; Engineering: General","Mathematics; Engineering; Engineering: Manufacturing","Mathematics; Fine Arts","Mathematics; General Works/Reference","Mathematics; Geography/Travel","Mathematics; Juvenile Literature","Mathematics; Pharmacy; Medicine","Mathematics; Philosophy","Mathematics; Political Science","Mathematics; Science","Mathematics; Science: General","Mathematics; Science: Geology; Science","Mathematics; Science: Physics; Science","Mathematics; Science; Science: Physics","Mathematics; Social Science","Mathematics; Social Science; Juvenile Literature","Mathematics; Sport &amp; Recreation"),
+                               newLabel = "Mathematics")
+```
+\newline
+20.) Combine all categories beginning with Medical, Medicine, or Nursing as Medical
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("MEDICAL","Medicine","Medicine; Agriculture","Medicine; Business/Management","Medicine; Business/Management; Economics; Pharmacy","Medicine; Business/Management; Pharmacy","Medicine; Business/Management; Pharmacy; Economics","Medicine; Economics","Medicine; Education","Medicine; Education; Psychology","Medicine; Engineering: Chemical; Engineering","Medicine; Engineering: Civil; Engineering","Medicine; Engineering: General; Engineering","Medicine; Engineering; Engineering: Chemical; Pharmacy","Medicine; Engineering; Engineering: Electrical","Medicine; Engineering; Pharmacy; Engineering: Chemical","Medicine; Environmental Studies","Medicine; Fiction" ,"Medicine; Fine Arts","Medicine; General Works/Reference","Medicine; Geography/Travel","Medicine; Health","Medicine; Health; Pharmacy","Medicine; Health; Pharmacy; Social Science","Medicine; Health; Psychology; Social Science","Medicine; Health; Social Science","Medicine; Health; Social Science; Pharmacy","Medicine; Health; Social Science; Psychology","Medicine; History","Medicine; Home Economics","Medicine; Home Economics; Health","Medicine; Home Economics; Psychology","Medicine; Language/Linguistics","Medicine; Language/Linguistics; Psychology","Medicine; Law","Medicine; Law; Health","Medicine; Literature"),
+                               newLabel = "Medical")
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Medicine; Mathematics","Medicine; Military Science","Medicine; Military Science; Psychology","Medicine; Nursing","Medicine; Pharmacy","Medicine; Pharmacy; Business/Management","Medicine; Pharmacy; Health","Medicine; Pharmacy; Health; Social Science","Medicine; Pharmacy; Law","Medicine; Pharmacy; Psychology","Medicine; Philosophy","Medicine; Political Science","Medicine; Psychology","Medicine; Psychology; Fiction","Medicine; Psychology; Health; Social Science","Medicine; Psychology; Home Economics","Medicine; Psychology; Literature","Medicine; Psychology; Nursing","Medicine; Psychology; Pharmacy","Medicine; Psychology; Religion","Medicine; Psychology; Social Science","Medicine; Psychology; Social Science; Health","Medicine; Religion","Medicine; Science: Anatomy/Physiology; Science","Medicine; Science: Biology/Natural History; Pharmacy; Science","Medicine; Science: Biology/Natural History; Science","Medicine; Science: Biology/Natural History; Science; Pharmacy","Medicine; Science: Botany; Science; Pharmacy","Medicine; Science: Chemistry; Science","Medicine; Science: General","Medicine; Science; Pharmacy; Science: Biology/Natural History","Medicine; Science; Pharmacy; Science: Chemistry","Medicine; Science; Science: Anatomy/Physiology","Medicine; Science; Science: Biology/Natural History","Medicine; Science; Science: Biology/Natural History; Pharmacy","Medicine; Science; Science: Botany; Pharmacy","Medicine; Science; Science: Physics","Medicine; Social Science","Medicine; Social Science; Health","Medicine; Social Science; Health; Pharmacy","Medicine; Social Science; Health; Psychology","Medicine; Social Science; Pharmacy","Medicine; Social Science; Pharmacy; Health","Medicine; Social Science; Psychology"),
+                               newLabel = "Medical")
+```
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Nursing","Nursing; Economics","Nursing; Health","Nursing; Literature","Nursing; Medicine","Nursing; Medicine; Health; Social Science","Nursing; Medicine; Pharmacy","Nursing; Philosophy","Nursing; Religion","Nursing; Social Science","Nursing; Social Science; Health","Pharmacy; Business/Management; Medicine","Pharmacy; Engineering; Medicine; Engineering: General","Pharmacy; Health; Medicine","Pharmacy; Medicine","Pharmacy; Medicine; Business/Management","Pharmacy; Medicine; Health","Pharmacy; Medicine; Health; Social Science","Pharmacy; Medicine; Psychology","Pharmacy; Science: Biology/Natural History; Science; Medicine","Pharmacy; Science: Botany; Medicine; Science","Pharmacy; Science: Chemistry; Medicine; Science","Pharmacy; Science; Medicine; Science: Biology/Natural History","Pharmacy; Social Science; Health; Medicine","Pharmacy; Social Science; Medicine; Health"  ),
+                               newLabel = "Medical")
+```
+
+
+\newline
+21.) Combine all categories beginning with philosophy
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Philosophy","PHILOSOPHY","Philosophy; Agriculture","Philosophy; Architecture","Philosophy; Business/Management","Philosophy; Computer Science/IT","Philosophy; Economics","Philosophy; Education","Philosophy; Engineering; Engineering: Chemical","Philosophy; Environmental Studies","Philosophy; Environmental Studies; Economics","Philosophy; Fine Arts","Philosophy; General Works/Reference","Philosophy; Geography/Travel","Philosophy; Health; Social Science","Philosophy; History","Philosophy; Home Economics","Philosophy; Journalism","Philosophy; Juvenile Literature","Philosophy; Language/Linguistics","Philosophy; Law","Philosophy; Literature","Philosophy; Literature; Fiction","Philosophy; Mathematics","Philosophy; Medicine","Philosophy; Medicine; Psychology","Philosophy; Military Science","Philosophy; Museums","Philosophy; Nursing","Philosophy; Pharmacy; Medicine","Philosophy; Political Science","Philosophy; Psychology","Philosophy; Religion","Philosophy; Science","Philosophy; Science: Biology/Natural History; Science","Philosophy; Science: General","Philosophy; Science: Physics; Science","Philosophy; Science: Zoology; Science","Philosophy; Science; Science: Anatomy/Physiology","Philosophy; Science; Science: Biology/Natural History","Philosophy; Science; Science: Physics","Philosophy; Science; Science: Zoology","Philosophy; Social Science","Philosophy; Social Science; Economics","Philosophy; Social Science; Health","Philosophy; Sport &amp; Recreation"),
+                               newLabel = "Philosophy")
+```
+\newline
+22.) Combine all categories beginning with Psychology                             
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Psychology","PSYCHOLOGY","Psychology; Architecture; Medicine","Psychology; Business/Management","Psychology; Business/Management; Economics","Psychology; Business/Management; Engineering; Engineering: Electrical","Psychology; Education","Psychology; Engineering: Civil; Engineering","Psychology; Environmental Studies","Psychology; Environmental Studies; Medicine","Psychology; Fiction","Psychology; Fine Arts","Psychology; General Works/Reference","Psychology; Geography/Travel","Psychology; Health","Psychology; Health; Medicine; Social Science","Psychology; Health; Social Science","Psychology; Health; Social Science; Medicine","Psychology; History","Psychology; Home Economics","Psychology; Juvenile Literature","Psychology; Language/Linguistics","Psychology; Law","Psychology; Literature","Psychology; Literature; Fiction","Psychology; Mathematics","Psychology; Medicine","Psychology; Medicine; Education","Psychology; Medicine; Fine Arts","Psychology; Medicine; Health; Social Science","Psychology; Medicine; Home Economics","Psychology; Medicine; Literature","Psychology; Medicine; Nursing","Psychology; Medicine; Pharmacy","Psychology; Medicine; Philosophy","Psychology; Medicine; Social Science","Psychology; Medicine; Social Science; Health","Psychology; Pharmacy; Medicine","Psychology; Philosophy","Psychology; Philosophy; Medicine","Psychology; Political Science","Psychology; Religion","Psychology; Religion; Medicine","Psychology; Science: Biology/Natural History; Science","Psychology; Science: Chemistry; Science","Psychology; Science; Science: Anatomy/Physiology","Psychology; Science; Science: Biology/Natural History","Psychology; Social Science","Psychology; Social Science; Health; Medicine","Psychology; Social Science; Medicine","Psychology; Social Science; Medicine; Health"),
+                               newLabel = "Psychology")
+```
+\newline
+23.) Combine all categoires beginning with Religion and Bibles as Religion
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Religion","RELIGION","Religion; Agriculture","Religion; Architecture","Religion; Business/Management","Religion; Education","Religion; Engineering: Environmental; Engineering","Religion; Environmental Studies","Religion; Fiction","Religion; Fine Arts","Religion; General Works/Reference","Religion; Geography/Travel","Religion; Health; Medicine","Religion; History","Religion; Language/Linguistics","Religion; Law","Religion; Library Science","Religion; Literature","Religion; Literature; Fiction","Religion; Medicine","Religion; Philosophy","Religion; Political Science","Religion; Psychology" ,"Religion; Publishing","Religion; Science","Religion; Social Science","Religion; Social Science; Economics","Religion; Sport &amp; Recreation", "BIBLES"),
+                               newLabel = "Religion")
+```
+\newline
+24.) Combine all categories beginning with Science
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Science","SCIENCE","Science: Anatomy/Physiology; Medicine; Science","Science: Anatomy/Physiology; Science","Science: Anatomy/Physiology; Science: Biology/Natural History; Science","Science: Anatomy/Physiology; Science: Zoology; Science","Science: Anatomy/Physiology; Science; Medicine","Science: Anatomy/Physiology; Science; Medicine; Psychology","Science: Anatomy/Physiology; Science; Philosophy","Science: Anatomy/Physiology; Science; Science: Biology/Natural History","Science: Anatomy/Physiology; Science; Social Science","Science: Anatomy/Physiology; Social Science; Science","Science: Astronomy; Engineering; Engineering: General; Science","Science: Astronomy; Fine Arts; Science","Science: Astronomy; Geography/Travel; Science","Science: Astronomy; History; Science","Science: Astronomy; Literature; Science; Fiction","Science: Astronomy; Science","Science: Astronomy; Science; Engineering; Engineering: Civil","Science: Astronomy; Science; Geography/Travel","Science: Astronomy; Science; History","Science: Astronomy; Science; Psychology","Science: Astronomy; Science; Science: Physics","Science: Biology/Natural History; Agriculture; Science","Science: Biology/Natural History; Economics; Environmental Studies; Science","Science: Biology/Natural History; Economics; Science; Business/Management","Science: Biology/Natural History; Engineering: Chemical; Engineering; Science","Science: Biology/Natural History; Engineering: Chemical; Science; Engineering","Science: Biology/Natural History; Engineering: General; Engineering; Science","Science: Biology/Natural History; Engineering; Engineering: Chemical; Science","Science: Biology/Natural History; Engineering; Engineering: Environmental; Science","Science: Biology/Natural History; Environmental Studies; Economics; Science","Science: Biology/Natural History; Environmental Studies; Science","Science: Biology/Natural History; Environmental Studies; Science; Economics","Science: Biology/Natural History; Geography/Travel; Science","Science: Biology/Natural History; Health; Medicine; Science","Science: Biology/Natural History; Health; Science","Science: Biology/Natural History; History; Science","Science: Biology/Natural History; Medicine; Science","Science: Biology/Natural History; Medicine; Science; Science: Anatomy/Physiology","Science: Biology/Natural History; Pharmacy; Medicine; Science" ),
+                               newLabel = "Science")
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Science: Biology/Natural History; Pharmacy; Science; Medicine","Science: Biology/Natural History; Philosophy; Science","Science: Biology/Natural History; Psychology; Science","Science: Biology/Natural History; Science","Science: Biology/Natural History; Science: Anatomy/Physiology; Medicine; Science","Science: Biology/Natural History; Science: Anatomy/Physiology; Science","Science: Biology/Natural History; Science: Botany; Science","Science: Biology/Natural History; Science: Chemistry; Science","Science: Biology/Natural History; Science: General; Science","Science: Biology/Natural History; Science: Physics; Science","Science: Biology/Natural History; Science: Zoology; Science","Science: Biology/Natural History; Science; Agriculture","Science: Biology/Natural History; Science; Economics; Environmental Studies","Science: Biology/Natural History; Science; Engineering; Engineering: Environmental","Science: Biology/Natural History; Science; Environmental Studies; Economics","Science: Biology/Natural History; Science; Health","Science: Biology/Natural History; Science; Health; Medicine","Science: Biology/Natural History; Science; Law","Science: Biology/Natural History; Science; Medicine","Science: Biology/Natural History; Science; Philosophy","Science: Biology/Natural History; Science; Psychology","Science: Biology/Natural History; Science; Science: Anatomy/Physiology","Science: Biology/Natural History; Science; Science: Botany","Science: Biology/Natural History; Science; Science: Chemistry","Science: Biology/Natural History; Science; Science: General","Science: Biology/Natural History; Science; Science: Geology","Science: Biology/Natural History; Science; Science: Zoology","Science: Biology/Natural History; Science; Social Science","Science: Biology/Natural History; Social Science; Science","Science: Botany; General Works/Reference; Science","Science: Botany; Home Economics; Science","Science: Botany; Science","Science: Botany; Science: Biology/Natural History; Science","Science: Botany; Science; Agriculture","Science: Botany; Science; Environmental Studies; Economics","Science: Botany; Science; Health","Science: Botany; Science; Science: Biology/Natural History","Science: Botany; Science; Science: Geology","Science: Botany; Science; Science: Zoology","Science: Botany; Science; Social Science","Science: Chemistry; Engineering: Electrical; Engineering; Science"),
+                               newLabel = "Science")                          
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Science: Chemistry; Engineering: General; Science; Engineering","Science: Chemistry; Engineering: Manufacturing; Science; Engineering","Science: Chemistry; Engineering; Engineering: Electrical; Science","Science: Chemistry; Engineering; Medicine; Engineering: General; Science","Science: Chemistry; Engineering; Science; Engineering: Chemical","Science: Chemistry; Engineering; Science; Engineering: Civil","Science: Chemistry; Science","Science: Chemistry; Science: Biology/Natural History; Science","Science: Chemistry; Science: Physics; Science","Science: Chemistry; Science; Education","Science: Chemistry; Science; Engineering: Chemical; Engineering","Science: Chemistry; Science; Engineering: General; Engineering","Science: Chemistry; Science; Engineering; Engineering: Chemical","Science: Chemistry; Science; Engineering; Engineering: General","Science: Chemistry; Science; Mathematics","Science: Chemistry; Science; Science: Biology/Natural History", "Science: Chemistry; Science; Science: Geology","Science: Chemistry; Science; Science: Physics","Science: General","Science: General; Business/Management","Science: General; Education","Science: General; History","Science: General; Literature","Science: General; Mathematics","Science: General; Medicine","Science: General; Pharmacy; Medicine","Science: General; Science","Science: General; Science: Biology/Natural History; Science","Science: General; Science: Biology/Natural History; Science; Juvenile Literature","Science: General; Science: Chemistry; Science","Science: General; Science; Science: Biology/Natural History","Science: Geology; Economics; Environmental Studies; Science","Science: Geology; Economics; Science","Science: Geology; Education; Science","Science: Geology; Engineering: Environmental; Science; Engineering","Science: Geology; Engineering; Engineering: Chemical; Science","Science: Geology; Engineering; Engineering: Environmental; Science","Science: Geology; Environmental Studies; Science","Science: Geology; Geography/Travel; Science","Science: Geology; Military Science; Science","Science: Geology; Science"),
+                               newLabel = "Science")                          
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Science: Geology; Science: Astronomy; Science","Science: Geology; Science: Biology/Natural History; Science","Science: Geology; Science: General; Science","Science: Geology; Science: Physics; Science","Science: Geology; Science: Physics; Science; Environmental Studies","Science: Geology; Science; Business/Management","Science: Geology; Science; Engineering: Mining; Engineering","Science: Geology; Science; Engineering; Engineering: Environmental","Science: Geology; Science; Environmental Studies; Science: Physics","Science: Geology; Science; Science: Biology/Natural History","Science: Geology; Science; Science: Physics","Science: Geology; Science; Social Science","Science: Geology; Social Science; Science","Science: Physics; Economics; Environmental Studies; Science","Science: Physics; Engineering: Electrical; Science; Engineering","Science: Physics; Engineering; Engineering: Civil; Science","Science: Physics; Engineering; Engineering: Electrical; Science","Science: Physics; Engineering; Engineering: General; Science","Science: Physics; Engineering; Science; Engineering: Electrical","Science: Physics; Environmental Studies; Science","Science: Physics; Fine Arts; Science","Science: Physics; Geography/Travel; Science","Science: Physics; Law; Science","Science: Physics; Mathematics; Science","Science: Physics; Philosophy; Science","Science: Physics; Science","Science: Physics; Science: Astronomy; Science","Science: Physics; Science: Chemistry; Science","Science: Physics; Science: General; Science","Science: Physics; Science: Geology; Science","Science: Physics; Science; Agriculture","Science: Physics; Science; Education","Science: Physics; Science; Engineering: Electrical; Engineering","Science: Physics; Science; Environmental Studies","Science: Physics; Science; Psychology","Science: Physics; Science; Science: Anatomy/Physiology","Science: Physics; Science; Science: Biology/Natural History","Science: Physics; Science; Science: Chemistry","Science: Physics; Science; Science: Geology","Science: Physics; Science; Social Science","Science: Physics; Social Science; Science","Science: Zoology; Agriculture; Science","Science: Zoology; Environmental Studies; Economics; Science","Science: Zoology; Environmental Studies; Science; Economics","Science: Zoology; Home Economics; Science","Science: Zoology; Medicine; Science"),
+                               newLabel = "Science")                          
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Science: Zoology; Science","Science: Zoology; Science: Biology/Natural History; Science","Science: Zoology; Science: General; Science","Science: Zoology; Science; Agriculture","Science: Zoology; Science; Economics; Environmental Studies","Science: Zoology; Science; Environmental Studies; Economics","Science: Zoology; Science; Medicine","Science: Zoology; Science; Science: Biology/Natural History", "Science: Zoology; Social Science; Science","Science; Agriculture; Environmental Studies; Science: Biology/Natural History","Science; Agriculture; Science: Biology/Natural History","Science; Agriculture; Science: Botany","Science; Agriculture; Science: Chemistry","Science; Agriculture; Science: Zoology","Science; Business/Management; Economics","Science; Business/Management; Economics; Science: General","Science; Computer Science/IT","Science; Economics","Science; Economics; Business/Management", "Science; Economics; Environmental Studies; Science: Biology/Natural History","Science; Economics; Science: Biology/Natural History; Environmental Studies","Science; Economics; Science: Biology/Natural History; Environmental Studies; Science: Zoology","Science; Economics; Science: Geology; Environmental Studies","Science; Education","Science; Engineering: Chemical; Engineering; Science: Biology/Natural History","Science; Engineering: Chemical; Engineering; Science: Chemistry","Science; Engineering: Chemical; Science: Biology/Natural History; Engineering","Science; Engineering: Chemical; Science: Biology/Natural History; Engineering; Science: Anatomy/Physiology","Science; Engineering: Chemical; Science: Chemistry; Engineering","Science; Engineering: Civil; Science: Geology; Engineering","Science; Engineering: Electrical; Engineering; Science: Physics","Science; Engineering: Electrical; Science: Physics; Engineering","Science; Engineering: Environmental; Engineering; Science: Biology/Natural History","Science; Engineering: Environmental; Science: Biology/Natural History; Engineering","Science; Engineering: General; Engineering","Science; Engineering: General; Engineering; Science: Astronomy","Science; Engineering: General; Engineering; Science: Chemistry","Science; Engineering: General; Engineering; Science: Geology","Science; Engineering: General; Science: Biology/Natural History; Engineering","Science; Engineering: General; Science: Physics; Engineering","Science; Engineering; Engineering: Chemical; Science: Biology/Natural History","Science; Engineering; Engineering: Civil; Science: Physics","Science; Engineering; Engineering: Electrical; Science: Physics","Science; Engineering; Engineering: General; Science: Physics","Science; Engineering; Engineering: Manufacturing","Science; Engineering; Science: Biology/Natural History; Engineering: Chemical"),
+                               newLabel = "Science")                          
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Science; Engineering; Science: Biology/Natural History; Engineering: Chemical; Science: Botany","Science; Engineering; Science: Chemistry; Engineering: Chemical","Science; Engineering; Science: Geology; Engineering: Mining","Science; Engineering; Science: Physics; Engineering: Civil","Science; Engineering; Science: Physics; Engineering: General","Science; Environmental Studies; Economics; Science: Biology/Natural History","Science; Environmental Studies; Economics; Science: Geology","Science; Environmental Studies; Economics; Science: Zoology","Science; Environmental Studies; Science: Biology/Natural History","Science; Environmental Studies; Science: Biology/Natural History; Economics","Science; Environmental Studies; Science: Geology","Science; Environmental Studies; Science: Physics","Science; Environmental Studies; Science: Physics; Economics","Science; General Works/Reference","Science; General Works/Reference; Science: Zoology","Science; Geography/Travel","Science; Geography/Travel; Science: Astronomy", "Science; Health; Science: Biology/Natural History","Science; Health; Science: Geology; Social Science","Science; Health; Social Science; Science: Biology/Natural History","Science; History","Science; History; Science: Astronomy","Science; History; Science: Biology/Natural History","Science; History; Science: Geology","Science; Language/Linguistics; Science: Biology/Natural History","Science; Language/Linguistics; Science: Geology","Science; Law","Science; Literature","Science; Literature; Science: Biology/Natural History","Science; Mathematics","Science; Mathematics; Science: Biology/Natural History","Science; Mathematics; Science: Physics","Science; Medicine; Health; Science: Biology/Natural History","Science; Medicine; Pharmacy; Science: Biology/Natural History","Science; Medicine; Science: Anatomy/Physiology","Science; Medicine; Science: Biology/Natural History","Science; Medicine; Science: Biology/Natural History; Pharmacy","Science; Medicine; Science: Botany","Science; Medicine; Science: Botany; Science: Biology/Natural History","Science; Medicine; Science: Chemistry","Science; Medicine; Science: Geology","Science; Medicine; Science: Physics","Science; Medicine; Science: Zoology","Science; Military Science; Science: Physics; Science: Geology","Science; Pharmacy; Science: Biology/Natural History; Medicine","Science; Philosophy" ),
+                               newLabel = "Science")                          
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Science; Philosophy; Science: Biology/Natural History","Science; Philosophy; Science: Zoology","Science; Political Science","Science; Psychology","Science; Psychology; Science: Anatomy/Physiology; Science: Biology/Natural History","Science; Psychology; Science: Biology/Natural History","Science; Psychology; Science: Zoology","Science; Religion","Science; Science: Anatomy/Physiology","Science; Science: Anatomy/Physiology; Computer Science/IT","Science; Science: Anatomy/Physiology; Medicine","Science; Science: Anatomy/Physiology; Psychology","Science; Science: Anatomy/Physiology; Science: Biology/Natural History","Science; Science: Anatomy/Physiology; Social Science","Science; Science: Astronomy","Science; Science: Astronomy; Geography/Travel","Science; Science: Astronomy; Philosophy","Science; Science: Astronomy; Science: Biology/Natural History","Science; Science: Astronomy; Science: Geology","Science; Science: Astronomy; Science: Physics","Science; Science: Biology/Natural History","Science; Science: Biology/Natural History; Agriculture","Science; Science: Biology/Natural History; Architecture","Science; Science: Biology/Natural History; Economics; Environmental Studies","Science; Science: Biology/Natural History; Engineering: Chemical; Engineering","Science; Science: Biology/Natural History; Engineering; Engineering: Environmental","Science; Science: Biology/Natural History; Engineering; Engineering: Environmental","Science; Science: Biology/Natural History; Environmental Studies","Science; Science: Biology/Natural History; Environmental Studies; Economics","Science; Science: Biology/Natural History; Health","Science; Science: Biology/Natural History; History","Science; Science: Biology/Natural History; Medicine","Science; Science: Biology/Natural History; Psychology","Science; Science: Biology/Natural History; Science: Anatomy/Physiology","Science; Science: Biology/Natural History; Science: Astronomy","Science; Science: Biology/Natural History; Science: Botany","Science; Science: Biology/Natural History; Science: General","Science; Science: Biology/Natural History; Science: Geology","Science; Science: Biology/Natural History; Science: Physics","Science; Science: Biology/Natural History; Science: Zoology","Science; Science: Biology/Natural History; Social Science","Science; Science: Botany","Science; Science: Botany; History","Science; Science: Botany; Science: Biology/Natural History","Science; Science: Botany; Science: Geology","Science; Science: Chemistry","Science; Science: Chemistry; Engineering: Chemical; Engineering" ),
+                               newLabel = "Science")                          
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Science; Science: Chemistry; Engineering: General; Engineering","Science; Science: Chemistry; Engineering; Engineering: Chemical","Science; Science: Chemistry; Engineering; Engineering: General","Science; Science: Chemistry; Engineering; Engineering: Manufacturing","Science; Science: Chemistry; Mathematics","Science; Science: Chemistry; Medicine","Science; Science: Chemistry; Science: Biology/Natural History","Science; Science: Chemistry; Science: Botany","Science; Science: Chemistry; Science: Physics","Science; Science: General","Science; Science: General; Science: Biology/Natural History","Science; Science: General; Science: Botany","Science; Science: General; Science: Physics","Science; Science: General; Science: Zoology","Science; Science: General; Social Science","Science; Science: Geology","Science; Science: Geology; Economics; Environmental Studies","Science; Science: Geology; Engineering: Environmental; Engineering","Science; Science: Geology; Engineering; Engineering: Mining","Science; Science: Geology; Environmental Studies","Science; Science: Geology; Environmental Studies; Engineering; Engineering: Environmental","Science; Science: Geology; Medicine","Science; Science: Geology; Science: Biology/Natural History","Science; Science: Geology; Science: Physics","Science; Science: Geology; Science: Zoology","Science; Science: Geology; Social Science","Science; Science: Physics","Science; Science: Physics; Economics; Business/Management","Science; Science: Physics; Engineering: Civil; Engineering","Science; Science: Physics; Engineering: Electrical; Engineering","Science; Science: Physics; Engineering: Environmental; Engineering","Science; Science: Physics; Engineering: General; Engineering","Science; Science: Physics; Engineering; Engineering: Electrical","Science; Science: Physics; Engineering; Engineering: General","Science; Science: Physics; Environmental Studies","Science; Science: Physics; Fine Arts","Science; Science: Physics; Mathematics","Science; Science: Physics; Philosophy","Science; Science: Physics; Science: Astronomy","Science; Science: Physics; Science: Biology/Natural History","Science; Science: Physics; Science: Geology","Science; Science: Physics; Social Science","Science; Science: Zoology","Science; Science: Zoology; Agriculture","Science; Science: Zoology; Environmental Studies; Economics","Science; Science: Zoology; Science: Anatomy/Physiology","Science; Science: Zoology; Science: Biology/Natural History", "Science; Science: Zoology; Science: Geology","Science; Science: Zoology; Social Science","Science; Social Science","Science; Social Science; Health; Science: Biology/Natural History","Science; Social Science; Science: Biology/Natural History","Science; Social Science; Science: Biology/Natural History; Health", "Science; Social Science; Science: Botany","Science; Social Science; Science: Geology","Science; Social Science; Science: Geology; Environmental Studies","Science; Social Science; Science: Physics","Science; Social Science; Science: Zoology","Science; Sport &amp; Recreation","Science; Sport &amp; Recreation; Science: Physics"),
+                               newLabel = "Science")                          
+```
+
+\newline
+25.) Combine all categories beginning with Social Science
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Social Science","SOCIAL SCIENCE","Social Science; Agriculture","Social Science; Agriculture; Business/Management","Social Science; Architecture","Social Science; Architecture; Health","Social Science; Business/Management","Social Science; Business/Management; Economics","Social Science; Business/Management; Health","Social Science; Business/Management; Political Science","Social Science; Computer Science/IT","Social Science; Economics","Social Science; Economics; Business/Management","Social Science; Economics; Business/Management; Health","Social Science; Economics; Environmental Studies","Social Science; Economics; Philosophy","Social Science; Education","Social Science; Education; Health","Social Science; Engineering: Electrical; Engineering","Social Science; Engineering: Environmental; Engineering","Social Science; Engineering: General; Engineering","Social Science; Engineering: General; Engineering; Health","Social Science; Engineering: Manufacturing; Engineering","Social Science; Engineering: Mechanical; Engineering","Social Science; Engineering: Mechanical; Engineering; Health","Social Science; Engineering; Engineering: Chemical","Social Science; Engineering; Engineering: Civil","Social Science; Engineering; Engineering: Construction","Social Science; Engineering; Engineering: Electrical","Social Science; Engineering; Engineering: Environmental","Social Science; Engineering; Engineering: General","Social Science; Engineering; Engineering: General; Business/Management; Economics","Social Science; Engineering; Engineering: Mechanical","Social Science; Environmental Studies","Social Science; Environmental Studies; Economics","Social Science; Environmental Studies; Health","Social Science; Fiction","Social Science; Fine Arts","Social Science; General Works/Reference","Social Science; General Works/Reference; Philosophy","Social Science; Geography/Travel","Social Science; Geography/Travel; History","Social Science; Health","Social Science; Health; Architecture","Social Science; Health; Business/Management","Social Science; Health; Computer Science/IT","Social Science; Health; Economics; Business/Management","Social Science; Health; Engineering: Chemical; Engineering","Social Science; Health; Engineering: General; Engineering","Social Science; Health; Engineering; Engineering: Environmental" ),
+                               newLabel = "Social Science")                          
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Social Science; Health; Geography/Travel","Social Science; Health; Law","Social Science; Health; Medicine","Social Science; Health; Medicine; Pharmacy","Social Science; Health; Medicine; Psychology","Social Science; Health; Nursing","Social Science; Health; Political Science","Social Science; Health; Psychology; Medicine","Social Science; Health; Religion","Social Science; Health; Science; Science: Anatomy/Physiology","Social Science; History","Social Science; History; Geography/Travel","Social Science; Home Economics","Social Science; Journalism","Social Science; Language/Linguistics","Social Science; Law","Social Science; Library Science","Social Science; Literature","Social Science; Literature; Fiction","Social Science; Literature; Fine Arts","Social Science; Literature; Health","Social Science; Literature; Language/Linguistics","Social Science; Mathematics","Social Science; Medicine","Social Science; Medicine; Fiction","Social Science; Medicine; Health","Social Science; Medicine; Health; Pharmacy","Social Science; Medicine; Health; Pharmacy; Business/Management","Social Science; Medicine; Health; Psychology","Social Science; Medicine; Psychology","Social Science; Military Science","Social Science; Military Science; Philosophy; Economics","Social Science; Nursing","Social Science; Nursing; Health","Social Science; Pharmacy; Health; Medicine","Social Science; Pharmacy; Medicine","Social Science; Philosophy","Social Science; Philosophy; Health","Social Science; Philosophy; Political Science","Social Science; Political Science","Social Science; Political Science; Economics","Social Science; Political Science; Literature","Social Science; Psychology","Social Science; Psychology; Health","Social Science; Psychology; Juvenile Literature"),
+                               newLabel = "Social Science")                          
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Social Science; Science: General","Social Science; Science: Geology; Science","Social Science; Science: Physics; Science","Social Science; Science; Health; Science: Biology/Natural History","Social Science; Science; Science: Biology/Natural History","Social Science; Science; Science: Geology","Social Science; Science; Science: Physics","Social Science; Science; Science: Zoology","Social Science; Sport &amp; Recreation","Social Science; Tourism/Hospitality","Social Science; Psychology; Medicine","Social Science; Religion","Social Science; Science","Social Science; Science: Anatomy/Physiology; Science","Social Science; Science: Biology/Natural History; Science" ),
+                               newLabel = "Social Science") 
+                
+```
+
+\newline
+26.) Combine all categories beginnig with Sport & amp as Sport & Recreation
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Sport &amp; Recreation","Sport &amp; Recreation; Agriculture","Sport &amp; Recreation; Architecture","Sport &amp; Recreation; Business/Management","Sport &amp; Recreation; Computer Science/IT","Sport &amp; Recreation; Economics","Sport &amp; Recreation; Economics; Business/Management","Sport &amp; Recreation; Education","Sport &amp; Recreation; Fiction","Sport &amp; Recreation; Fine Arts","Sport &amp; Recreation; Geography/Travel","Sport &amp; Recreation; Health" ,"Sport &amp; Recreation; Journalism","Sport &amp; Recreation; Law","Sport &amp; Recreation; Mathematics","Sport &amp; Recreation; Military Science","Sport &amp; Recreation; Philosophy","Sport &amp; Recreation; Political Science","Sport &amp; Recreation; Psychology","Sport &amp; Recreation; Religion","Sport &amp; Recreation; Social Science","Sport &amp; Recreation; Social Science; Fine Arts","SPORTS & RECREATION" ),
+                               newLabel = "Sports & Recreation") 
+```
+
+\newline
+27.) combine all categories beginning with Tourism/Hospitality
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Tourism/Hospitality","Tourism/Hospitality; Business/Management", "Tourism/Hospitality; Business/Management; Economics","Tourism/Hospitality; Economics","Tourism/Hospitality; Economics; Business/Management","Tourism/Hospitality; Geography/Travel","Tourism/Hospitality; Health; Social Science","Tourism/Hospitality; Literature","Tourism/Hospitality; Social Science"),
+                               newLabel = "Tourism/Hospitality") 
+```
+\newline
+28.) Combine Antiques & Collection, Art, Design, Photography, and and Fine Arts into Arts
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("ANTIQUES & COLLECTIBLES","ART","DESIGN","PHOTOGRAPHY", "Fine Arts"),
+                               newLabel = "Arts") 
+```
+
+\newline
+29.) Combine Drama, Music, and Performing Arts into Performing Arts
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("DRAMA","MUSIC","PERFORMING ARTS"),
+                               newLabel = "Performing Arts") 
+```
+\newline
+30.) Combine Juvenile Fiction, Fiction, Juvenile Nonfiction, Young Adult Nonfiction, Humor, Biography & Autobiography, and Comics & Graphic Novels into Fiction/Nonfiction
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("JUVENILE FICTION", "FICTION", "JUVENILE NONFICTION", "YOUNG ADULT NONFICTION","BIOGRAPHY & AUTOBIOGRAPHY","HUMOR","COMICS & GRAPHIC NOVELS"),
+                               newLabel = "Fiction/Nonfiction") 
+```
+\newline
+31.) Combine Body, Mind & Spirit, Cooking, Crats & Hobbies, Family & Relationships, Games, Gardening, Self-Help, Pets, and Home into Sports & Recreation
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("BODY, MIND & SPIRIT","COOKING","CRAFTS & HOBBIES","FAMILY & RELATIONSHIPS","GAMES" ,"GARDENING","SELF-HELP","PETS","Home"),
+                               newLabel = "Sports & Recreation") 
+```
+
+
+\newline
+32.) Combine Foreign Language Study, Philosophy, Library Science, True crime into Social Science
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("FOREIGN LANGUAGE STUDY","Philosophy","Library Science","Social Science","TRUE CRIME"),
+                               newLabel = "Social Science") 
+```
+
+\newline
+33.) Combine Travel, Transportaion, and Tourism/Hospitality into Travel/Tourism
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("TRAVEL","Geology/Travel","TRANSPORTATION","Tourism/Hospitality"),
+                               newLabel = "Travel/Tourism")
+```
+
+\newline
+34.) Combine Education and Study aids as Education
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Education","STUDY AIDS"),
+                               newLabel = "Education")
+```
+\newline
+35.) combine Nature and Environmental Studies as Environmental Studies
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("NATURE","Environmental Studies"),
+                               newLabel = "Environmental Studies")
+```
+
+\newline
+36.) Combine Language Arts, Literary Criticism, Poetry,and Journalism/Publishing into Literary Criticism.
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Language Arts","Literary Criticism","POETRY","Journalism/Publishing"),
+                               newLabel = "Language Arts")
+```
+\newline
+37.) Combine Reference and Non-Classifiable into Reference/Other
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c( "Reference","NON-CLASSIFIABLE"),
+                               newLabel = "Reference/Other")
+```
+\newline
+Let's take a look at the categories after all combinations so far and the number of observations per category for our data
+```{r}
+levels(pq_df$Subject)
+```
+
+```{r}
+ggplot(pq_df, aes(Subject)) +
+  geom_bar(fill = "#0073C2FF") +
+  theme_minimal()+theme(axis.text.x = element_text(angle = 90))
+```
+\newline
+There are still too many categories (23) and there are very few titles that fall into some categories such as travel/tourism and environmental science. Some additional combinations will need to be done.
+
+\newline
+Below are the additional combinations done and the resulting cagegories and frequency of each category in our data.
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Mathematics", "Science","Environmental Studies"),
+                               newLabel = "Math/Science")
+```
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("ComputerScience/IT"),
+                               newLabel = "Tech/Engineering")
+```
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Architecture", "Arts","Performing Arts"),
+                               newLabel = "Arts")
+```
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Travel/Tourism"),
+                               newLabel = "Business/Economics")
+```
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Health/Fitness", "Medical"),
+                               newLabel = "Health/Medicine")
+```
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Fiction/Nonfiction"),
+                               newLabel = "Language Arts")
+```
+
+
+```{r,echo=FALSE,results='hide'}
+pq_df$Subject <- combineLevels(pq_df$Subject, 
+                               levs = c("Agriculture"),
+                               newLabel = "Reference/Other")
+
+```
+
+```{r}
+levels(pq_df$Subject)
+```
+
+```{r}
+ggplot(pq_df, aes(Subject)) +
+  geom_bar(fill = "#0073C2FF") +
+  theme_minimal()+theme(axis.text.x = element_text(angle = 90))
+```
+\newline
+## Export the Data
+***
+\newline
+
+```{r}
+#write.csv(pq_df, file="Proquest_data.csv")
+```
+
+\newline
+Remove rows where Ownership is unidentified. 
+```{r, results='hide'}
+pq_df <- pq_df[complete.cases(pq_df$Ownership), ]
+```
+
+```{r}
+#Check that rows w/ NA values for Ownership have been removed
+sapply(pq_df, function(x) sum(is.na(x)))
+```
+\newline
+It looks like there is one observation missing both Campus and Year. That row will be removed.
+```{r}
+pq_df <- pq_df[complete.cases(pq_df$Year), ]
+
+```
+\newline
+\newline
+***
+# Analysis
+\newline
+***
+\newline
+## Owned vs Subscribed Usage
+***
+\newline
+Below are a plot and a table detailing the total number of uses per reporting period (year) for owned titles compared to subscribed titles for each unique campus, year, and title combination. The table includes percentage of use by ownership type.
+\newline
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+ggplot(pq_df, aes(x=Ownership, y=Reporting.Period.Total, fill=Ownership)) + geom_bar(stat="identity")+labs(title = "Usage by Ownership", y= "Total Uses")+theme_minimal()+theme(axis.text.x=element_blank())
+```
+\newline
+```{r , echo=FALSE,render=lemon_print}
+t <- pq_df %>%                                        
+    group_by(Ownership) %>%                         
+    summarise_at(vars(Reporting.Period.Total),             
+               list(Total_Uses = sum))
+
+df <- data.frame(t)
+df$Total_Uses <- as.numeric(df$Total_Uses)
+df$Percentage <- round(df$Total_Uses / sum(df$Total_Uses) * 100,2)
+df
+```
+\newline
+## Usage by Year
+***
+\newline
+
+The following plot and table show the usage of all titles by year. The table includes percentage of use each year has recieved out of the 5 years considered. 
+```{r, echo=FALSE}
+pq_df$Year <- as.factor(pq_df$Year)
+
+pq_df %>%                                        
+    group_by(Year) %>%
+    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+    ggplot(aes(y=total_uses, x=Year)) + geom_bar(position="dodge", stat="identity", fill="aquamarine3")+ theme_minimal()+labs(title="Usage by Year",y="Total Uses", x="Year")
+```
+\newline
+```{r, echo=FALSE,render=lemon_print }
+t2 <- pq_df %>%                                        
+    group_by(Year) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+
+df2 <- data.frame(t2)
+df2$Total_Uses <- as.numeric(df2$Total_Uses)
+df2$Percentage <- round(df2$Total_Uses/sum(df2$Total_Uses) *100,2)
+
+
+df2
+```
+\newline
+
+### Subscribed Title Usage per Year
+The following plot and table display the usage subscribed titles by year. 
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+subscribed <- pq_df[pq_df$Ownership=="subscribed",]
+
+subscribed %>%                                        
+    group_by(Year) %>%
+    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+    ggplot( aes(y=total_uses, x=Year)) + geom_bar(position="dodge", stat="identity", fill="cyan3")+labs(title = "Usage of Subscribed Titles by Year", y= "Total Uses")+theme_minimal()
+
+```
+\newline
+```{r, echo=FALSE, render=lemon_print}
+t3 <- subscribed %>%                                        
+    group_by(Year) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+
+
+df3 <- data.frame(t3)
+df3$Total_Uses <- as.numeric(df3$Total_Uses)
+df3$Percentage <- round(df3$Total_Uses/sum(df3$Total_Uses) *100,2)
+
+df3
+```
+\newline
+### Owned Title Usage per Year
+The following plot and table display the usage of owned titles by year. 
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+owned <- pq_df[pq_df$Ownership=="owned",]
+
+owned %>%                                        
+    group_by(Year) %>%
+    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+    ggplot( aes(y=total_uses, x=Year)) + geom_bar(position="dodge", stat="identity", fill="coral1")+labs(title = "Usage of Owned Titles by Year", y= "Total Uses")+theme_minimal()
+
+```
+\newline
+```{r, echo=FALSE, render=lemon_print}
+t4 <- subscribed %>%                                        
+    group_by(Year) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+
+
+df4 <- data.frame(t4)
+df4$Total_Uses <- as.numeric(df4$Total_Uses)
+df4$Percentage <- round(df4$Total_Uses/sum(df4$Total_Uses) *100,2)
+
+
+df4
+```
+\newline
+## Usage by Campus
+***
+\newline
+The following plot and table display the usage of titles by campus. The table also displays percentage of usage by campus.
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+pq_df %>%                                        
+    group_by(Campus) %>%
+    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+    ggplot(aes(y=total_uses, x=Campus)) + geom_bar(position="dodge", stat="identity", fill="aquamarine3")+ theme_minimal()+labs(title="Usage by Campus",y="Total Uses")+ theme(axis.text.x = element_text(angle = 90)) # Rotate axis labels
+```
+\newline
+```{r, echo=FALSE,render=lemon_print,,message=FALSE,warning=FALSE}
+t5 <- pq_df %>%                                        
+    group_by(Campus) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+
+df5 <- data.frame(t5)
+df5$Total_Uses <- as.numeric(df5$Total_Uses)
+df5$Percentage <- round(df5$Total_Uses/sum(df5$Total_Uses) *100,2)
+
+
+df5
+```
+\newline
+
+### Subscribed Title Usage by Campus
+\newline
+The following plot and table display the usage of subscribed titles by campus. The table also displays percentage of usage by campus.
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+subscribed%>%                                        
+    group_by(Campus) %>%
+    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+    ggplot(aes(y=total_uses, x=Campus)) + geom_bar(position="dodge", stat="identity", fill="cyan3")+ theme_minimal()+labs(title="Subscribed Usage by Campus",y="Total Uses")+ theme(axis.text.x = element_text(angle = 90)) # Rotate axis labels
+```
+\newline
+```{r, echo=FALSE,render=lemon_print,,message=FALSE,warning=FALSE}
+t6 <- subscribed %>%                                        
+    group_by(Campus) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+
+df6 <- data.frame(t6)
+df6$Total_Uses <- as.numeric(df6$Total_Uses)
+df6$Percentage <- round(df6$Total_Uses/sum(df6$Total_Uses) *100,2)
+
+
+df6
+```
+\newline
+### Owned Title Usage by Campus
+\newline
+The following plot and table display the usage of subscribed titles by campus. The table also displays percentage of usage by campus.
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+owned %>%                                        
+    group_by(Campus) %>%
+    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+    ggplot(aes(y=total_uses, x=Campus)) + geom_bar(position="dodge", stat="identity", fill="coral2")+ theme_minimal()+labs(title="Owned Usage by Campus",y="Total Uses")+ theme(axis.text.x = element_text(angle = 90)) # Rotate axis labels
+```
+\newline
+```{r, echo=FALSE,render=lemon_print,,message=FALSE,warning=FALSE}
+t7 <- owned%>%                                        
+    group_by(Campus) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+
+df7 <- data.frame(t7)
+df7$Total_Uses <- as.numeric(df7$Total_Uses)
+df7$Percentage <- round(df7$Total_Uses/sum(df7$Total_Uses) *100,2)
+
+
+df7
+```
+\newline
+### Usage by Campus, Ownership, and Year
+The following plots and tables break down the number of uses for owned titles and subscribed titles for each year by campus.
+\newline
+```{r, echo=FALSE,results='hide',fig.keep='all'}
+campuses <- levels(pq_df$Campus)
+plot_list <- list()
+
+for (i in 1:length(campuses)){
+
+  df <- pq_df[pq_df$Campus == campuses[i],]
+  
+  plot_list[[i]] <- df %>%                                        
+                    group_by(Year, Ownership) %>%
+                    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+                    ggplot( aes(fill=Ownership, y=total_uses, x=Year)) + geom_bar(position="dodge", stat="identity") + labs(title = campuses[i], y= "Total Uses")+theme_minimal()
+    
+ 
+}
+
+plot_list
+```
+
+```{r,echo=FALSE,render=lemon_print}
+campuses <- levels(pq_df$Campus)
+table_list <- list()
+for (i in 1:length(campuses)){
+  df <- pq_df[pq_df$Campus == campuses[i],]
+  print(campuses[i])
+  print(kable(table_list[[i]] <- df %>%                                        
+        group_by(Year, Ownership) %>%
+        summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum))))
+
+}
+```
+## Usage by Subject Area
+***
+\newline
+
+### Usage by Subject Area
+The following plot and table show the usage of titles by subject area. The table also includes percentage of usage by subject
+\newline
+```{r, echo=FALSE}
+pq_df$Subject <- as.factor(pq_df$Subject)
+
+pq_df %>%                                        
+    group_by(Subject) %>%
+    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+    ggplot(aes(y=total_uses, x=Subject)) + geom_bar(position="dodge", stat="identity", fill="aquamarine3")+ theme_minimal()+labs(title="Usage by Subject",y="Total Uses")+ theme(axis.text.x = element_text(angle = 90)) # Rotate axis labels
+```
+
+```{r, echo=FALSE, render=lemon_print}
+t8 <- pq_df %>%                                        
+    group_by(Subject) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+
+df8 <- data.frame(t8)
+df8$Total_Uses <- as.numeric(df8$Total_Uses)
+df8$Percentage <- round(df8$Total_Uses/sum(df8$Total_Uses) *100,2)
+
+
+df8
+```
+\newline
+### Subscribed Title Usage by Subject
+\newline
+The following plot and table display the usage of subscribed titles by subject area. The table also displays percentage of usage by subject.
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+subscribed %>%                                        
+    group_by(Subject) %>%
+    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+    ggplot(aes(y=total_uses, x=Subject)) + geom_bar(position="dodge", stat="identity", fill="cyan3")+ theme_minimal()+labs(title="Subscribed Usage by Subject",y="Total Uses")+ theme(axis.text.x = element_text(angle = 90)) # Rotate axis labels
+```
+\newline
+```{r, echo=FALSE,render=lemon_print,,message=FALSE,warning=FALSE}
+t9 <- subscribed %>%                                        
+    group_by(Subject) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+
+df9 <- data.frame(t6)
+df9$Total_Uses <- as.numeric(df9$Total_Uses)
+df9$Percentage <- round(df6$Total_Uses/sum(df9$Total_Uses) *100,2)
+
+
+df9
+```
+\newline
+### Owned Title Usage by Subject
+\newline
+The following plot and table display the usage of subscribed titles by campus. The table also displays percentage of usage by campus.
+```{r, echo=FALSE, message=FALSE,warning=FALSE}
+owned %>%                                        
+    group_by(Subject) %>%
+    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+    ggplot(aes(y=total_uses, x=Subject)) + geom_bar(position="dodge", stat="identity", fill="coral2")+ theme_minimal()+labs(title="Owned Usage by Subject",y="Total Uses")+ theme(axis.text.x = element_text(angle = 90)) # Rotate axis labels
+```
+\newline
+```{r, echo=FALSE,render=lemon_print,,message=FALSE,warning=FALSE}
+t10 <- owned %>%                                        
+    group_by(Subject) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum)) 
+
+df10 <- data.frame(t10)
+df10$Total_Uses <- as.numeric(df10$Total_Uses)
+df10$Percentage <- round(df10$Total_Uses/sum(df10$Total_Uses) *100,2)
+
+
+df10
+```
+\newline
+### Usage by Subject Area, Ownership, and Campus
+\newline
+The following plots and tables break down the number of uses for owned titles and subscribed titles for each subject area and campus.
+\newline
+```{r, echo=FALSE,results='hide',fig.keep='all'}
+subjects <- levels(pq_df$Subject)
+plot_list3 <- list()
+
+for (i in 1:length(subjects)){
+
+  df <- pq_df[pq_df$Subject == subjects[i],]
+  
+  plot_list3[[i]] <- df %>%                                        
+                    group_by(Campus, Ownership) %>%
+                    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+                    ggplot( aes( y=total_uses, x=Campus, fill=Ownership)) + geom_bar(position="dodge", stat="identity") + labs(title = subjects[i], y= "Total Uses", x="Campus")+theme_minimal() +theme(axis.text.x = element_text(angle = 90))
+  
+}
+
+plot_list3
+```
+\newline
+```{r, echo=FALSE,render=lemon_print}
+subjects <- levels(pq_df$Subject)
+
+for (i in 1:length(subjects)){
+  df <- pq_df[pq_df$Subject == subjects[i],]
+  print(subjects[i])
+  print(kable(df %>%                                        
+    group_by(Campus, Ownership) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum))))
+}
+```
+\newline
+### Usage by Subject, Ownership, and Year
+\newline
+The following plots and tables show the total number of uses for owned compared to subscribed titles for each subject category and year.
+\newline
+```{r, echo=FALSE,results='hide',fig.keep='all'}
+subjects <- levels(pq_df$Subject)
+plot_list4 <- list()
+
+for (i in 1:length(subjects)){
+
+  df <- pq_df[pq_df$Subject == subjects[i],]
+  
+  plot_list4[[i]] <- df %>%                                        
+                    group_by(Year, Ownership) %>%
+                    summarise(total_uses = sum(Reporting.Period.Total)) %>%
+                    ggplot( aes( y=total_uses, x=Year, fill=Ownership)) + geom_bar(position="dodge", stat="identity") + labs(title = subjects[i], y= "Total Uses", x="Year")+theme_minimal() +theme(axis.text.x = element_text(angle = 90))
+  
+}
+
+plot_list4
+```
+
+\newline
+```{r, echo=FALSE,render=lemon_print}
+subjects <- levels(pq_df$Subject)
+
+for (i in 1:length(subjects)){
+  df <- pq_df[pq_df$Subject == subjects[i],]
+  print(subjects[i])
+  print(kable(df %>%                                        
+    group_by(Year, Ownership) %>%
+    summarise_at(vars(Reporting.Period.Total),              
+               list(Total_Uses = sum))))
+}
+```
+
+
+
+
+
+
