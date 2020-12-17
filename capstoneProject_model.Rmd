@@ -1,0 +1,366 @@
+---
+title: "capstone Project: Predictive Model"
+output: word_doc
+---
+
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+## Setup:
+```{r}
+#load necessary packages/libraries
+library(readr)
+library(dplyr)
+library(plyr)
+library(stringr)
+library(ggplot2)
+library(knitr)
+library(tidyr)
+library(lemon)
+knit_print.data.frame <- lemon_print
+library(gbm)
+library(caret)
+library(Metrics)
+library(rockchalk)
+library(fastDummies)
+```
+
+
+```{r}
+#set working directory
+wd = getwd()
+setwd(wd)
+```
+
+\newline
+# Load and Combine Datasets
+*** 
+\newline
+The Wiley and Proquet data used has been cleaned and combined in the .rmd files capstoneProject_Wiley.Rmd and capstoneProject_Proquest.Rmd respectively prior to use here.
+\newline
+Load Wiley data:
+\newline
+```{r echo=FALSE}
+wiley <- read_csv("Wiley_data.csv")
+summary(wiley)
+```
+\newline
+Create a subset of data with only relevant columns:
+\newline
+```{r}
+wiley <- subset(wiley, select=c(Platform,BookReport_Type,Campus,Reporting.Period.Total,Ownership,Subject,Print.Pub.Year))
+head(wiley)
+```
+\newline
+Load Proquest data:
+```{r}
+proquest <- read_csv("Proquest_data.csv")
+summary(proquest)
+```
+\newline
+Add BookReport_Type column to proquest data to assign a book report type and to match columns in Wiley data. All Proquest data came from BR2 reports, so all Proquest observations will be given a value of "BR2" for BookReport_Type
+\newline
+```{r}
+proquest$BookReport_Type <- "BR2"
+```
+\newline
+Create a subset of the Proquest data with relevant columns only
+\newline
+```{r}
+proquest <- subset(proquest, select = c(Platform,BookReport_Type,Campus,Reporting.Period.Total,Ownership,Subject,Print.Pub.Year))
+head(proquest)
+```
+\newline
+Combine Wiley and Proquest data:
+\newline
+```{r}
+df <- rbind(wiley,proquest)
+summary(df)
+```
+\newline
+The resulting variables in the combined datsets are:
+- Platform: platform ebook is accessed through. This also differentiates titles through vendors Wiley(Wiley Online Library) and Proquest(ProQuest Ebook Central and Ebrary)
+- BookReport_Type: counter report from which the data was collected
+- Campus: 13 UW campuses 
+- Reporting.Period.Total: Total uses an ebook/title received in a reporting period (one year)
+- Ownership: whether the title is owned or accessed through a subscription
+- Subject: Subject area the title falls under
+- Print.Pub.Year: Year ebook/title was published in print
+\newline
+Platform, BookReport_Type, Campus, Ownership, and Subject are converted to the appropriate variable type of factor type.
+\newline
+```{r}
+cols = c("Platform","BookReport_Type","Campus","Ownership","Subject")
+df[cols] <- lapply(df[cols], as.factor)
+summary(df)
+```
+
+```{r}
+#rename rows with misspelled campus UWBG to UWGB
+levels(df$Campus)
+levels(df$Campus)[1] <- "UWGB"
+levels(df$Campus)
+```
+Remove all rows with NA as NA values will not work in boosting later on. Since all predictor variables are categorical, there is no easy way such as taking a mean or median to impute missing values either. One option is to assign one of the most frequent factor levels, but this is not always helpful, and there is enough data to spare.
+```{r}
+df <- df[complete.cases(df),]
+
+```
+
+# Feature Engineering
+Subject categories have already been combined previously in capstoneProject_Proquest.Rmd from 2080 to 14 subject categories with the assistance of the University of Wisconsin library program faculty. However, there are still 31 subject categories. There are some overlapping categories that can be further combined. 18 subject categories came from the wiley data nd 14 came from proquest (A few overlapped resulting in 31). 
+
+Let us start by taking a look at the distribution of current factor levels
+\newline
+```{r}
+length(levels(df$Subject))
+ggplot(df, aes(Subject)) +
+  geom_bar(fill = "#0073C2FF") +
+  theme_minimal()+theme(axis.text.x = element_text(angle = 90))
+```
+
+```{r}
+levels(df$Subject)
+```
+```{r}
+df$Subject <- combineLevels(df$Subject, 
+                               levs = c("Law & Criminology"),
+                               newLabel = "Law/Political Science" )  
+```
+
+```{r}
+df$Subject <- combineLevels(df$Subject, 
+                               levs = c("Architecture & Planning","Art & Applied Arts" ),
+                               newLabel = "Arts") 
+```
+
+```{r}
+df$Subject <- combineLevels(df$Subject, 
+                               levs = c("Social & Behavioral Sciences"),
+                               newLabel = "Social Science") 
+```
+
+```{r}
+df$Subject <- combineLevels(df$Subject, 
+                               levs = c("Veterinary Medicine","Nursing, Dentistry & Healthcare","Medicine" ),
+                               newLabel = "Health/Medicine") 
+```
+
+
+```{r}
+df$Subject <- combineLevels(df$Subject, 
+                               levs = c("Computer Science  & Information Technology","Physical Sciences & Engineering" ),
+                               newLabel = "Tech/Engineering") 
+```
+
+
+```{r}
+df$Subject <- combineLevels(df$Subject, 
+                               levs = c("Life Sciences", "Mathematics & Statistics", "Chemistry","Earth, Space & Environmental Sciences" ),
+                               newLabel = "Math/Science" ) 
+```
+
+```{r}
+df$Subject <- combineLevels(df$Subject, 
+                               levs = c("Business, Economics, Finance & Accounting"),
+                               newLabel = "Business/Economics" ) 
+```
+
+```{r}
+df$Subject <- combineLevels(df$Subject, 
+                               levs = c("Agriculture, Aquaculture & Food Science", "Religion", "Sports & Recreation" ),
+                               newLabel = "Reference/Other") 
+```
+
+```{r}
+df$Subject <- combineLevels(df$Subject, 
+                               levs = c("Psychology","Humanities"),
+                               newLabel = "Humanities/Psychology") 
+```
+
+```{r}
+df$Subject <- combineLevels(df$Subject, 
+                               levs = c("Law/Political Science","History"),
+                               newLabel = "History/Law") 
+```
+
+Remove observations with Subject category no_access. This label was created for usage analysis purposes and is no longer useful.
+```{r}
+df <- df[df$Subject != "no_access",]
+droplevels(df)
+```
+
+```{r}
+length(levels(df$Subject))
+ggplot(df, aes(Subject)) +
+  geom_bar(fill = "#0073C2FF") +
+  theme_minimal()+theme(axis.text.x = element_text(angle = 90))
+```
+
+Let's take a lookt at the variable print publication year and its distribution across the data.
+\newline
+```{r}
+pub_yrs <- df[!is.na(df$Print.Pub.Year),]
+pub_yrs <- pub_yrs[pub_yrs$Print.Pub.Year!=0,]
+summary(pub_yrs$Print.Pub.Year)
+```
+
+
+```{r}
+theme_set(theme_minimal())
+ggplot(pub_yrs, aes(Print.Pub.Year))+
+  geom_histogram()
+```
+\newline
+While the earliest print publication year is 1802, there are very observations with print publication years from 1802-1950 as the counts of titles with print publication years that fall in that range are not visible in the histogram above.
+\newline
+Let's take a closer look at the frequencies for each print publication year:
+\newline
+```{r}
+table(as.factor(df$Print.Pub.Year))
+```
+\newline
+There are two rows with print publication years of 0 which is not a valid value. Those two rows are assigned values of NA instead.
+\newline
+```{r}
+df$Print.Pub.Year <- as.numeric(df$Print.Pub.Year)
+df$Print.Pub.Year[df$Print.Pub.Year==0] <- NA
+summary(df$Print.Pub.Year)
+```
+\newline
+New factor levels will be created so with more equally distributed frequencies using the quartiles seen above. The print publication years will be divided into 4 categories:
+1. < 2005: before 2005
+2. 2005-2009: inclusive of 2005 and 2009
+3. 2010-2012: inclusive of 2010 and 2012
+4. > 2012: after 2012
+
+```{r}
+# assign categories of 1-4 as described
+df$Print.Pub.Year[df$Print.Pub.Year<2005] <- 1
+df$Print.Pub.Year[df$Print.Pub.Year >= 2005 & df$Print.Pub.Year <= 2009] <- 2
+df$Print.Pub.Year[df$Print.Pub.Year > 2009 & df$Print.Pub.Year <= 2012] <- 3
+df$Print.Pub.Year[df$Print.Pub.Year > 2012] <- 4
+
+#convert Print.Pub.Year to factor type
+df$Print.Pub.Year <- as.factor(df$Print.Pub.Year)
+#display new frequencies
+table(df$Print.Pub.Year)
+```
+
+```{r}
+#rename factor levels as described above
+df$Print.Pub.Year <- mapvalues(df$Print.Pub.Year, from = c("1", "2","3","4"), to = c("<2005", "2005-2009","2010-2012",">2012"))
+levels(df$Print.Pub.Year)
+```
+\newline
+
+***
+# Machine Learning Methods
+***
+\newline
+## Ensemble-Learning Method: Gradient Boosting
+***
+\newline
+
+### Parameter Tuning
+\newline
+
+#### Using gbm
+\newline
+Paremeter tuning is done using gbm to select n.trees or the number of boosting iterations or trees fitted. 
+\newline
+```{r}
+
+set.seed(99)
+boost.gbm <- gbm(Reporting.Period.Total ~ ., data=df, distribution="gaussian", n.trees=700, interaction.depth=5,
+           n.minobsinnode=10, shrinkage=0.01, bag.fraction=0.75, cv.folds=10, verbose=FALSE)
+best.iter <- gbm.perf(boost.gbm, method="cv")
+cat("Optimal number of trees/iterations: ",best.iter)
+
+```
+\newline
+Let's take a look at the relitive influence of our predictor variables and the corresponding variable importance plot:
+\newline
+```{r}
+boost.gbm
+summary(boost.gbm)
+```
+\newline
+It looks like, using gbm(), Subject and Campus are found to have the 2 highest relative influences on Reporting.Period.Total. They have very similar influences (26.9 vs 24.7 respectively). BookReport_Type is has the least and very little relative influence with a score of 0.1.
+\newline
+
+### Using caret
+\newline
+Paremeter tuning is also performed using caret to compare with the best n.trees selected by gbm as well as to select addition parameters including:
+- interaction.depth: the maximum allowable tree depth (number of splits)
+- shrinkage: shrinking parameter or learning rate that updates how fitting occurs each iteration
+- n.minobsinnode: minimum terminal node size
+\newline
+These are all parameters essential to the performance of boosting.
+\newline
+```{r}
+metric <- "RMSE"
+trainControl <- trainControl(method="cv", number=10)
+
+set.seed(99)
+gbm.caret <- train(Reporting.Period.Total ~ .
+                   , data=df_complete
+                   , distribution="gaussian"
+                   , method="gbm"
+                   , trControl=trainControl
+                   , verbose=FALSE
+                   #, tuneGrid=caretGrid
+                   , metric=metric
+                   , bag.fraction=0.75
+                   )                  
+
+print(gbm.caret)
+```
+\newline
+```{r}
+summary(gbm.caret)
+```
+\newline
+The relative influence information and variable importance plot given by caret is finer grained. It categorizes each factor level as a separate variable. Platform Wiley Online Library is by far the most important or influential variable identified by caret. Second is CampusUWMAD. This is not surprising as those two factor levels have the highest frequency in the data for their respective variables (Platform and Campus). This varies a bit from the results obtained using gbm as Subject was the variable with the highest relative influence using gbm, followed by Campus. 
+\newline
+
+### Predictions & Performance
+\newline
+Both caret and gbm will be used to predict on the testing data
+
+### Using gbm
+```{r}
+gbm.pred <- predict.gbm(object=boost.gbm, newdata=df, 674)
+
+rmse.gbm<-rmse(df$Reporting.Period.Total, gbm.pred)
+cat("RMSE: ",rmse.gbm,"\n")
+
+r2.gbm <- cor(boost.gbm$fit, df$Reporting.Period.Total)^2
+cat("R2: ",r2.gbm)
+```
+\newline
+
+### Using caret
+\newline
+```{r}
+caret.pred <- predict(gbm.caret, newdata=df_complete, type="raw")
+
+rmse.caret<-rmse(df_complete$Reporting.Period.Total, caret.pred)
+cat("RMSE: ",rmse.caret,"\n")
+
+R2.caret <- cor(gbm.caret$finalModel$fit, df_complete$Reporting.Period.Total)^2
+cat("R2 :",R2.caret)
+```
+\newline
+Both gradient boosting using gbm and caret don't perform very well. Using gbm, the result root mean square error is 251.33 and R2 is very low at 0.013. Using caret, the RMSE is about the same at 252.05, but the R2 is even worse at 0.007.
+
+The poor performance may be due to low correlation between the predictor variables of BookReport_Type, Campus, Subject, Platform, Print.Pub.Year, and Ownership to Reporting.Period.Total or total usage per year for a title. Large differences in weight of factor levels such as in Subject and Campus may have contributed to the poor performance as well. 
+
+
+
+
+
+
+
